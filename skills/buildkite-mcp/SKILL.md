@@ -67,6 +67,31 @@ Read a focused slice of the log:
 mcporter call 'buildkite-remote.read_logs(org_slug: "ORG", pipeline_slug: "PIPELINE", build_number: "BUILD_NUMBER", job_id: "JOB_ID", seek: SEEK, limit: 100)' --output json
 ```
 
+## Downloading artifacts
+
+1) List artifacts for a job and extract the download URL:
+```bash
+mcporter call 'buildkite-remote.list_artifacts_for_job(org_slug: "ORG", pipeline_slug: "PIPELINE", build_number: "BUILD_NUMBER", job_id: "JOB_ID", page: 1, perPage: 100)' --output json \
+  | jq -r '.items[] | [.path, .download_url] | @tsv'
+```
+
+2) Attempt direct download via MCP (returns base64 data on success):
+```bash
+mcporter call 'buildkite-remote.get_artifact(url: "DOWNLOAD_URL")' --output json \
+  | jq -r '.data' \
+  | base64 --decode > artifact
+```
+
+3) If you see `Only one auth mechanism allowed` (S3 rejects the Authorization header), extract the
+   presigned S3 URL from the MCP error and download with curl (no auth header):
+```bash
+DOWNLOAD_URL="https://api.buildkite.com/v2/organizations/ORG/pipelines/PIPELINE/builds/BUILD_NUMBER/jobs/JOB_ID/artifacts/ARTIFACT_ID/download"
+S3_URL=$(mcporter call "buildkite-remote.get_artifact(url: \"${DOWNLOAD_URL}\")" --output json \
+  | perl -ne 'if (/GET (https:\/\/s3.amazonaws.com[^ ]+)/) { $u=$1; $u=~s/:$//; print $u }')
+
+curl -L "$S3_URL" -o artifact
+```
+
 ## Notes
 
 - Use `--output json` so you can script the results.
