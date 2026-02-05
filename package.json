@@ -1,0 +1,21 @@
+{
+  "name": "pi-skills",
+  "version": "0.1.0",
+  "description": "Shared pi skills and extensions for the team.",
+  "private": true,
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-skill"
+  ],
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-tui": "*"
+  }
+}
