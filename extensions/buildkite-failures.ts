@@ -19,6 +19,14 @@ type BuildkiteUrlParts = {
   readonly buildNumber: string;
 };
 
+type BuildPayload = {
+  readonly number: string;
+  readonly url: string | null;
+  readonly branch: string | null;
+  readonly commit: string | null;
+  readonly message: string | null;
+};
+
 type TestSummaryEntry = {
   readonly testName: string;
   readonly labels: Array<string>;
@@ -61,6 +69,7 @@ type JobPayload = {
 };
 
 type FailuresPayload = {
+  readonly build: BuildPayload | null;
   readonly summary: SummaryPayload;
   readonly jobs: Array<JobPayload>;
   readonly meta?: {
@@ -74,6 +83,7 @@ type FailuresPayload = {
 type CommandContext = Parameters<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>[1];
 
 type ErrorPayload = {
+  readonly build: BuildPayload | null;
   readonly error: {
     readonly testName: string;
     readonly jobId: string;
@@ -113,6 +123,7 @@ const CATEGORY_LABELS: Record<TestCategory, string> = {
   single: "SINGLE",
 };
 const ENVIRONMENT_ORDER = ["chromium", "mobile", "firefox", "webkit"];
+const NO_IFRAME_LABELS = new Set(["chromium", "firefox", "webkit"]);
 const EXTENSION_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FAILURE_SCRIPT_PATH = path.resolve(
   EXTENSION_ROOT,
@@ -329,6 +340,16 @@ function normalizeTestName(line: string): string {
 
 function formatEnvironmentLabel(label: string): string {
   return label.replace(/\s+\(iframe\)/g, " (ifr)");
+}
+
+function formatEnvironmentLabelForOutput(label: string): string {
+  if (label.includes("(iframe)")) {
+    return label;
+  }
+  if (NO_IFRAME_LABELS.has(label)) {
+    return `${label} (no iframe)`;
+  }
+  return label;
 }
 
 function compareEnvironmentLabels(left: string, right: string): number {
@@ -644,16 +665,26 @@ function formatErrorOutput(
     payload.error.startRow,
     payload.error.endRow
   );
-  const lines: Array<string> = [
-    "Buildkite error",
-    `Test: ${payload.error.testName}`,
-    `Env: ${envEntry.label}`,
-    `Job: ${payload.error.jobId}`,
+  const envLabel = formatEnvironmentLabelForOutput(envEntry.label);
+  const buildUrl = payload.build?.url ?? buildBuildkiteJobUrl(parts, null);
+  const jobUrl = normalizeBuildkiteUrl(
+    parts,
+    payload.error.jobId,
+    payload.error.jobUrl
+  );
+  const lines: Array<string> = ["Buildkite error", `Test: ${payload.error.testName}`];
+  if (payload.build?.branch) {
+    lines.push(`Branch: ${payload.build.branch}`);
+  }
+  lines.push(
+    `Env: ${envLabel}`,
+    `Build: ${buildUrl}`,
+    `Job: ${jobUrl}`,
     `Rows: ${rangeLabel}`,
     `Log: ${logUrl}`,
     "",
-    ...payload.error.lines,
-  ];
+    ...payload.error.lines
+  );
   return lines.join("\n");
 }
 

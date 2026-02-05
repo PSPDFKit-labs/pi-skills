@@ -17,7 +17,7 @@ const DEFAULT_ERROR_SEARCH_LIMIT = 20;
 const DEFAULT_ERROR_CONTEXT = 2;
 const DEFAULT_ERROR_READ_LIMIT = 200;
 const DEFAULT_SERVER = "buildkite-remote";
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 const CACHE_DIR = path.join(os.tmpdir(), "pi-buildkite-playwright-failures");
 
 const USAGE = `Usage:
@@ -184,6 +184,26 @@ function sanitizeKey(value) {
 function buildCachePath({ orgSlug, pipelineSlug, buildNumber, serverName }) {
   const safe = [serverName, orgSlug, pipelineSlug, buildNumber].map(sanitizeKey).join("__");
   return path.join(CACHE_DIR, `${safe}.json`);
+}
+
+function coerceString(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function extractBuildInfo(build, buildNumber) {
+  return {
+    number: build?.number !== undefined && build?.number !== null
+      ? String(build.number)
+      : String(buildNumber),
+    url: coerceString(build?.web_url),
+    branch: coerceString(build?.branch),
+    commit: coerceString(build?.commit),
+    message: coerceString(build?.message),
+  };
 }
 
 async function loadCache(cachePath) {
@@ -547,6 +567,26 @@ async function mcporterCall(server, tool, args) {
   }
 }
 
+async function fetchBuild({ orgSlug, pipelineSlug, buildNumber, serverName }) {
+  let build;
+  try {
+    build = await mcporterCall(serverName, "get_build", {
+      org_slug: orgSlug,
+      pipeline_slug: pipelineSlug,
+      build_number: buildNumber,
+      detail_level: "full",
+    });
+  } catch (error) {
+    throw new Error(error.message);
+  }
+
+  if (build?.isError) {
+    throw new Error(extractErrorMessage(build));
+  }
+
+  return build;
+}
+
 async function fetchErrorPayload({
   orgSlug,
   pipelineSlug,
@@ -649,6 +689,19 @@ async function main() {
   const serverName = args.server;
 
   if (args.errorFor) {
+    let buildInfo = null;
+    try {
+      const build = await fetchBuild({
+        orgSlug,
+        pipelineSlug,
+        buildNumber,
+        serverName,
+      });
+      buildInfo = extractBuildInfo(build, buildNumber);
+    } catch {
+      buildInfo = null;
+    }
+
     try {
       const errorPayload = await fetchErrorPayload({
         orgSlug,
@@ -663,7 +716,11 @@ async function main() {
         context: args.errorContext,
         readLimit: args.errorReadLimit,
       });
-      console.log(JSON.stringify(errorPayload, null, 2));
+      const output = {
+        ...errorPayload,
+        build: buildInfo,
+      };
+      console.log(JSON.stringify(output, null, 2));
       return;
     } catch (error) {
       console.error(`Failed to fetch error details: ${error.message}`);
@@ -674,11 +731,11 @@ async function main() {
 
   let build;
   try {
-    build = await mcporterCall(serverName, "get_build", {
-      org_slug: orgSlug,
-      pipeline_slug: pipelineSlug,
-      build_number: buildNumber,
-      detail_level: "full",
+    build = await fetchBuild({
+      orgSlug,
+      pipelineSlug,
+      buildNumber,
+      serverName,
     });
   } catch (error) {
     console.error(`Failed to fetch build: ${error.message}`);
@@ -686,11 +743,7 @@ async function main() {
     return;
   }
 
-  if (build?.isError) {
-    console.error(`Failed to fetch build: ${extractErrorMessage(build)}`);
-    process.exitCode = 1;
-    return;
-  }
+  const buildInfo = extractBuildInfo(build, buildNumber);
 
   let allPlaywrightJobs;
   try {
@@ -712,6 +765,7 @@ async function main() {
   if (cached && isCacheValid(cached, { orgSlug, pipelineSlug, buildNumber, serverName, jobStates })) {
     const payload = {
       ...cached.payload,
+      build: cached.payload.build ?? buildInfo,
       meta: {
         cached: true,
         cachePath,
@@ -852,6 +906,7 @@ async function main() {
   const summary = buildSummaryData(jobResults);
   const cachedAt = new Date().toISOString();
   const payload = {
+    build: buildInfo,
     summary,
     jobs: jobResults,
     meta: {
@@ -873,6 +928,7 @@ async function main() {
       jobStates,
     },
     payload: {
+      build: buildInfo,
       summary,
       jobs: jobResults,
     },
