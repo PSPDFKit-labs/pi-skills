@@ -1,0 +1,12 @@
+gh-address-comments skill
+==========================
+
+This skill is derived from the gh-address-comments skill originally published at:
+  https://skills.sh/openai/skills/gh-address-comments
+
+Original work licensed under the Apache License, Version 2.0.
+
+Modifications:
+  - Added build & verify step before committing (with Xcode MCP priority for iOS projects)
+  - Added per-comment atomic commits with descriptive messages
+  - Added post-run summary step
