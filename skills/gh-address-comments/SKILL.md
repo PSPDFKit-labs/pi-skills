@@ -34,9 +34,10 @@ Prereq: ensure `gh` is authenticated (for example, run `gh auth login` once), th
   4. Commit with a message that:
      - Summarizes the change on the first line (e.g. `Fix null check in parseConfig as requested in review`)
      - Includes a blank line, then a short explanation of **what the reviewer asked for** and **what was changed to address it**
-     - References the review thread if possible (e.g. the file path and line number from the thread)
-  5. Move on to the next comment
-- After all selected comments are addressed, show a summary of all commits made
+  5. Push the commit and reply on the PR review thread with a short summary of the fix and the commit hash (e.g. `"Added a nil check before accessing the property. (a1b2c3d)"`)
+  6. Move on to the next comment
+- For comments the user chose **not** to address, reply on the PR thread explaining why (e.g. over-engineering, not applicable, etc.) so the reviewer knows their feedback was considered
+- After all comments are handled, show a summary of all commits made
 
 ## 4) Post-run summary
 - List each commit (hash + message) created during this session
