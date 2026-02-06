@@ -6,12 +6,15 @@ Shared pi skills and extensions used by the team. Add this repo as a local packa
 
 ### Skills
 
+- `buildkite-mcp` — use mcporter to call the Buildkite MCP server.
+- `buildkite-playwright-failures` — extract failed-only Playwright tests from Buildkite logs.
 - `github` — use the `gh` CLI for issues, PRs, and runs.
 - `multi-review` — multi-model PR review workflow.
 - `tmux` — drive tmux sessions for interactive tools.
 
 ### Extensions
 
+- `buildkite-failures` — `/bk-playwright-errors <url>` shows a selectable list of failing Playwright tests and opens the Buildkite job in a browser.
 - `loop` — `/loop` command that keeps a follow-up loop running until a breakout condition is met.
 - `notify` — desktop notification when the agent finishes and waits for input.
 
