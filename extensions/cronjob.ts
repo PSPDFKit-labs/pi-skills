@@ -12,6 +12,7 @@
  *   /cron pause <job-id-or-name>
  *   /cron resume <job-id-or-name>
  *   /cron run <job-id-or-name>
+ *   /cron claim <job-id-or-name>
  */
 
 import { randomUUID } from "node:crypto";
@@ -30,6 +31,7 @@ type CronJob = {
 	readonly createdAtIso: string;
 	readonly enabled: boolean;
 	readonly lastRunAtIso: string | null;
+	readonly sessionId: string;
 };
 
 type PersistedState = {
@@ -341,15 +343,20 @@ function formatJobIdentity(job: CronJob): string {
 	return `${job.name} (${job.id})`;
 }
 
-function formatJobForList(runtimeJob: RuntimeJob): string {
+function formatJobForList(runtimeJob: RuntimeJob, currentSessionId: string): string {
 	const lastRunMs = runtimeJob.job.lastRunAtIso === null ? null : Date.parse(runtimeJob.job.lastRunAtIso);
 	const nextRunText = formatTimestamp(runtimeJob.nextRunAtMs);
 	const lastRunText = formatTimestamp(Number.isNaN(lastRunMs ?? Number.NaN) ? null : lastRunMs);
 	const status = runtimeJob.job.enabled ? "enabled" : "paused";
+	const ownerText = runtimeJob.job.sessionId === currentSessionId
+		? "this session"
+		: runtimeJob.job.sessionId.length > 0
+			? `session ${runtimeJob.job.sessionId}`
+			: "unclaimed";
 	const promptPreview = runtimeJob.job.prompt.length > 80
 		? `${runtimeJob.job.prompt.slice(0, 77)}...`
 		: runtimeJob.job.prompt;
-	return `${formatJobIdentity(runtimeJob.job)}  ${status}\n  schedule: ${runtimeJob.job.schedule}\n  next: ${nextRunText}\n  last: ${lastRunText}\n  queued: ${runtimeJob.pendingRuns}\n  prompt: ${promptPreview}`;
+	return `${formatJobIdentity(runtimeJob.job)}  ${status}\n  owner: ${ownerText}\n  schedule: ${runtimeJob.job.schedule}\n  next: ${nextRunText}\n  last: ${lastRunText}\n  queued: ${runtimeJob.pendingRuns}\n  prompt: ${promptPreview}`;
 }
 
 function parseAddArguments(raw: string): ParseResult<{ readonly schedule: string; readonly prompt: string }> {
@@ -520,6 +527,9 @@ function validateCronJob(raw: unknown): ParseResult<CronJob> {
 	if (typeof candidate.lastRunAtIso === "string" && Number.isNaN(Date.parse(candidate.lastRunAtIso))) {
 		return { success: false, error: `invalid lastRunAtIso timestamp for job ${candidate.id}` };
 	}
+	if (candidate.sessionId !== undefined && candidate.sessionId !== null && typeof candidate.sessionId !== "string") {
+		return { success: false, error: `invalid sessionId for job ${candidate.id}` };
+	}
 
 	return {
 		success: true,
@@ -531,6 +541,7 @@ function validateCronJob(raw: unknown): ParseResult<CronJob> {
 			createdAtIso: candidate.createdAtIso,
 			enabled: candidate.enabled,
 			lastRunAtIso: candidate.lastRunAtIso,
+			sessionId: typeof candidate.sessionId === "string" ? candidate.sessionId : "",
 		},
 	};
 }
@@ -575,6 +586,7 @@ function buildPrompt(job: CronJob): string {
 }
 
 export default function cronJobExtension(pi: ExtensionAPI): void {
+	const currentSessionId = randomUUID().slice(0, 8);
 	let runtimeJobsById = new Map<string, RuntimeJob>();
 	let timer: ReturnType<typeof setInterval> | null = null;
 	let isAgentBusy = false;
@@ -633,7 +645,7 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 	const tick = () => {
 		const nowMs = Date.now();
 		for (const runtimeJob of runtimeJobsById.values()) {
-			if (!runtimeJob.job.enabled) {
+			if (!runtimeJob.job.enabled || runtimeJob.job.sessionId !== currentSessionId) {
 				continue;
 			}
 
@@ -659,7 +671,7 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 		}
 
 		for (const runtimeJob of runtimeJobsById.values()) {
-			if (!runtimeJob.job.enabled || runtimeJob.pendingRuns <= 0) {
+			if (!runtimeJob.job.enabled || runtimeJob.pendingRuns <= 0 || runtimeJob.job.sessionId !== currentSessionId) {
 				continue;
 			}
 			dispatchOnePendingRun(runtimeJob, "scheduled");
@@ -758,14 +770,16 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 
 	const printHelp = (emit: (message: string, level: NotifyLevel) => void): void => {
 		emit(
-			"cron commands: add, every, list, remove, pause, resume, run\n" +
-				"selectors: remove/pause/resume/run accept id or name\n" +
+			"cron commands: add, every, list, remove, pause, resume, run, claim\n" +
+				"selectors: remove/pause/resume/run/claim accept id or name\n" +
+				"ownership: jobs only run in the session that created them\n" +
 				"busy behavior: due runs are queued and drained when idle\n" +
 				"examples:\n" +
 				"/cron add */15 * * * * -- check CI\n" +
 				"/cron add --name ci-check */15 * * * * -- check CI\n" +
 				"/cron add \"*/15 * * * *\" \"check CI\"\n" +
-				"/cron every --name ci-check 15m -- check CI",
+				"/cron every --name ci-check 15m -- check CI\n" +
+				"/cron claim ci-check  (adopt a job from another session)",
 			"info",
 		);
 	};
@@ -781,7 +795,16 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 		tick();
 
 		if (ctx.hasUI) {
-			ctx.ui.notify(`cronjob extension loaded (${runtimeJobsById.size} jobs)`, "info");
+			const totalJobs = runtimeJobsById.size;
+			const ownedCount = Array.from(runtimeJobsById.values()).filter(
+				(rj) => rj.job.sessionId === currentSessionId,
+			).length;
+			const otherCount = totalJobs - ownedCount;
+			let message = `cronjob extension loaded (${totalJobs} job(s))`;
+			if (otherCount > 0) {
+				message += ` — ${otherCount} from other sessions (use /cron claim to adopt)`;
+			}
+			ctx.ui.notify(message, "info");
 		}
 	});
 
@@ -818,7 +841,7 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 
 				const lines = Array.from(runtimeJobsById.values())
 					.sort((left, right) => formatJobIdentity(left.job).localeCompare(formatJobIdentity(right.job)))
-					.map(formatJobForList)
+					.map((rj) => formatJobForList(rj, currentSessionId))
 					.join("\n\n");
 				ctx.ui.notify(lines, "info");
 				return;
@@ -856,6 +879,7 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 					createdAtIso: new Date().toISOString(),
 					enabled: true,
 					lastRunAtIso: null,
+					sessionId: currentSessionId,
 				};
 
 				const result = upsertJob(job);
@@ -912,6 +936,7 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 					createdAtIso: new Date().toISOString(),
 					enabled: true,
 					lastRunAtIso: null,
+					sessionId: currentSessionId,
 				};
 
 				const result = upsertJob(job);
@@ -1000,6 +1025,14 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 				}
 				const runtimeJob = resolved.value;
 
+				if (isAgentBusy && runtimeJob.job.sessionId !== currentSessionId) {
+					ctx.ui.notify(
+						`cannot queue: job belongs to another session. use /cron claim ${identifier} to adopt it`,
+						"error",
+					);
+					return;
+				}
+
 				runtimeJob.pendingRuns += 1;
 				runtimeJobsById.set(runtimeJob.job.id, runtimeJob);
 
@@ -1012,6 +1045,32 @@ export default function cronJobExtension(pi: ExtensionAPI): void {
 				}
 
 				dispatchOnePendingRun(runtimeJob, "manual");
+				return;
+			}
+
+			if (args.startsWith("claim ")) {
+				const identifier = args.slice(6).trim();
+				if (identifier.length === 0) {
+					ctx.ui.notify("usage: /cron claim <job-id-or-name>", "error");
+					return;
+				}
+				const resolved = getJobByIdentifier(identifier);
+				if (!resolved.success) {
+					ctx.ui.notify(resolved.error, "error");
+					return;
+				}
+				const runtimeJob = resolved.value;
+				if (runtimeJob.job.sessionId === currentSessionId) {
+					ctx.ui.notify(`job ${formatJobIdentity(runtimeJob.job)} already belongs to this session`, "info");
+					return;
+				}
+				runtimeJob.job = { ...runtimeJob.job, sessionId: currentSessionId };
+				runtimeJob.nextRunAtMs = runtimeJob.job.enabled
+					? nextRunAfter(runtimeJob.parsed, Date.now())
+					: null;
+				runtimeJobsById.set(runtimeJob.job.id, runtimeJob);
+				persistState();
+				ctx.ui.notify(`claimed cron job ${formatJobIdentity(runtimeJob.job)} to this session`, "info");
 				return;
 			}
 
