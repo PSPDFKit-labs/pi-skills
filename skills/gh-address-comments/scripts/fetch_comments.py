@@ -78,6 +78,8 @@ query(
           originalLine
           originalStartLine
           resolvedBy { login }
+          # Nested thread comments are capped at 100 and not paginated.
+          # This is unlikely to be hit; we can add pagination here if needed.
           comments(first: 100) {
             nodes {
               id
