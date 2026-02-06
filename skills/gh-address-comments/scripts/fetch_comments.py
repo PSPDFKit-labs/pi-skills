@@ -47,7 +47,7 @@ query(
           body
           createdAt
           updatedAt
-          author { login }
+          author { login }  # Can be null if the account was deleted
         }
       }
 
@@ -59,7 +59,7 @@ query(
           state
           body
           submittedAt
-          author { login }
+          author { login }  # Can be null if the account was deleted
         }
       }
 
@@ -86,7 +86,7 @@ query(
               body
               createdAt
               updatedAt
-              author { login }
+              author { login }  # Can be null if the account was deleted
             }
           }
         }
