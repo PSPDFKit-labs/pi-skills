@@ -20,7 +20,7 @@ npm install -g github:PSPDFKit-labs/buildkite-cli#v0.0.2
 Alternative with pnpm:
 
 ```bash
-pnpm add -g github:PSPDFKit-labs/buildkite-cli#v0.0.1
+pnpm add -g github:PSPDFKit-labs/buildkite-cli#v0.0.2
 ```
 
 Verify:
@@ -37,18 +37,19 @@ Set one of these env vars before calling `bkci`:
 - `BUILDKITE_API_TOKEN`
 - `BK_TOKEN`
 
-Or set up local auth config interactively:
+If no env token is set, auth can be configured interactively:
 
 ```bash
 bkci auth setup
 ```
 
 This writes `~/.config/buildkite-cli/auth.json` with strict permissions.
-For non-interactive runs, use:
 
-```bash
-bkci auth setup --token "$BUILDKITE_TOKEN"
-```
+### Agent safety rule
+
+- Do **not** run `bkci auth setup` automatically.
+- If `bkci auth status` reports missing token/auth, stop and ask the user to run auth setup manually.
+- Do **not** pass token values in command arguments unless the user explicitly requests it.
 
 Required scopes:
 
@@ -117,7 +118,7 @@ Use `--raw` to keep exact Buildkite payloads in `data`.
 
 ## Recommended usage pattern
 
-1. `auth status`
+1. `auth status` (if this fails due to missing token/scopes, ask user to fix auth before continuing)
 2. `builds list` (optionally filtered by `--pipeline`, `--branch`, `--state`)
 3. `builds get` for the selected build
 4. `jobs log get` for relevant job IDs
