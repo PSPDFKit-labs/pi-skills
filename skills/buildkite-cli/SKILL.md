@@ -14,7 +14,7 @@ This is a good default when you need structured JSON output that is easy for age
 Install globally from the tagged GitHub ref:
 
 ```bash
-npm install -g github:PSPDFKit-labs/buildkite-cli#v0.0.1
+npm install -g github:PSPDFKit-labs/buildkite-cli#v0.0.2
 ```
 
 Alternative with pnpm:
@@ -36,6 +36,19 @@ Set one of these env vars before calling `bkci`:
 - `BUILDKITE_TOKEN`
 - `BUILDKITE_API_TOKEN`
 - `BK_TOKEN`
+
+Or set up local auth config interactively:
+
+```bash
+bkci auth setup
+```
+
+This writes `~/.config/buildkite-cli/auth.json` with strict permissions.
+For non-interactive runs, use:
+
+```bash
+bkci auth setup --token "$BUILDKITE_TOKEN"
+```
 
 Required scopes:
 
