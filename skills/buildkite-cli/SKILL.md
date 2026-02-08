@@ -9,24 +9,28 @@ Use this skill when you want CI data from Buildkite through the `bkci` utility.
 
 This is a good default when you need structured JSON output that is easy for agents to parse.
 
-## Install from GitHub (tagged)
+## Install from local checkout
 
-Install globally from the tagged GitHub ref:
-
-```bash
-npm install -g github:PSPDFKit-labs/buildkite-cli#v0.0.2
-```
-
-Alternative with pnpm:
+For now, install from a local clone and link it:
 
 ```bash
-pnpm add -g github:PSPDFKit-labs/buildkite-cli#v0.0.2
+git clone https://github.com/PSPDFKit-labs/buildkite-cli <buildkite-cli-dir>
+cd <buildkite-cli-dir>
+pnpm install
+pnpm run build
+npm link
 ```
 
 Verify:
 
 ```bash
 bkci --help
+```
+
+After pulling updates, rebuild:
+
+```bash
+pnpm run build
 ```
 
 ## Authentication

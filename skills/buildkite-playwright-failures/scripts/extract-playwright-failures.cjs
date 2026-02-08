@@ -451,7 +451,7 @@ async function runBkciJson(bkciPath, args) {
     const stdout = error?.stdout?.toString().trim();
     const detail = stderr || stdout || error.message;
     if (detail.includes("ENOENT") || /spawn .* ENOENT/i.test(detail)) {
-      throw new Error(`bkci not found at '${bkciPath}'. install with: npm install -g github:PSPDFKit-labs/buildkite-cli#v0.0.2`);
+      throw new Error("bkci not found. install from a local checkout: clone buildkite-cli, run 'pnpm install && pnpm run build', then 'npm link'");
     }
     throw new Error(detail);
   }
