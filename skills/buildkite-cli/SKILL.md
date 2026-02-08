@@ -9,37 +9,25 @@ Use this skill when you want CI data from Buildkite through the `bkci` utility.
 
 This is a good default when you need structured JSON output that is easy for agents to parse.
 
-## Install from GitHub
+## Install from GitHub (tagged)
 
-Use the public repo and install it in any directory (do not assume a machine-specific path):
-
-```bash
-BKCI_DIR="${BKCI_DIR:-$HOME/.local/share/buildkite-cli}"
-
-if [ ! -d "$BKCI_DIR/.git" ]; then
-  git clone https://github.com/PSPDFKit-labs/buildkite-cli "$BKCI_DIR"
-fi
-
-cd "$BKCI_DIR"
-pnpm install
-pnpm run build
-```
-
-## Running the CLI
-
-From the clone directory:
+Install globally from the tagged GitHub ref:
 
 ```bash
-node dist/index.js ...
+npm install -g github:PSPDFKit-labs/buildkite-cli#v0.0.1
 ```
 
-or:
+Alternative with pnpm:
 
 ```bash
-pnpm exec tsx src/index.ts ...
+pnpm add -g github:PSPDFKit-labs/buildkite-cli#v0.0.1
 ```
 
-If `bkci` is already on `PATH`, you can call it directly.
+Verify:
+
+```bash
+bkci --help
+```
 
 ## Authentication
 
@@ -58,7 +46,7 @@ Required scopes:
 Validate token/scopes first:
 
 ```bash
-node dist/index.js auth status
+bkci auth status
 ```
 
 For local 1Password usage, this is commonly used:
@@ -72,37 +60,37 @@ export BUILDKITE_TOKEN="$(op read 'op://Employee/Buildkite Agent Token/credentia
 List builds:
 
 ```bash
-node dist/index.js builds list --org ORG --pipeline PIPELINE --per-page 10
+bkci builds list --org ORG --pipeline PIPELINE --per-page 10
 ```
 
 Get one build with jobs:
 
 ```bash
-node dist/index.js builds get --org ORG --pipeline PIPELINE --build BUILD_NUMBER
+bkci builds get --org ORG --pipeline PIPELINE --build BUILD_NUMBER
 ```
 
 Fetch one job log (cleaned output):
 
 ```bash
-node dist/index.js jobs log get --org ORG --pipeline PIPELINE --build BUILD_NUMBER --job JOB_ID --tail-lines 400 --max-bytes 250000
+bkci jobs log get --org ORG --pipeline PIPELINE --build BUILD_NUMBER --job JOB_ID --tail-lines 400 --max-bytes 250000
 ```
 
 List artifacts:
 
 ```bash
-node dist/index.js artifacts list --org ORG --pipeline PIPELINE --build BUILD_NUMBER
+bkci artifacts list --org ORG --pipeline PIPELINE --build BUILD_NUMBER
 ```
 
 Download artifact(s):
 
 ```bash
-node dist/index.js artifacts download --org ORG --pipeline PIPELINE --build BUILD_NUMBER --artifact-id ARTIFACT_ID --out /tmp/bk-artifacts
+bkci artifacts download --org ORG --pipeline PIPELINE --build BUILD_NUMBER --artifact-id ARTIFACT_ID --out /tmp/bk-artifacts
 ```
 
 List annotations:
 
 ```bash
-node dist/index.js annotations list --org ORG --pipeline PIPELINE --build BUILD_NUMBER
+bkci annotations list --org ORG --pipeline PIPELINE --build BUILD_NUMBER
 ```
 
 ## Output contract
