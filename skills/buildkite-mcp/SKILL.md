@@ -1,9 +1,11 @@
 ---
 name: buildkite-mcp
-description: "Use mcporter with mcp-remote to access Buildkite MCP for builds, jobs, and logs when direct OAuth is flaky."
+description: "Deprecated: legacy Buildkite MCP workflow via mcporter/mcp-remote. Prefer buildkite-cli when possible."
 ---
 
 # Buildkite MCP via mcporter + mcp-remote
+
+> Deprecated: Prefer `/skill:buildkite-cli` for new workflows. Keep this skill for backward compatibility.
 
 Use this skill to access Buildkite data through the Buildkite MCP server using `mcp-remote` as a stdio proxy. This avoids flaky direct OAuth flows.
 

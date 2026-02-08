@@ -9,47 +9,26 @@ const { promisify } = require("node:util");
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_PATTERN = String.raw`\b\d+ failed\b`;
-const DEFAULT_SEARCH_LIMIT = 80;
-const DEFAULT_CONTEXT = 3;
-const DEFAULT_READ_LIMIT = 120;
-const DEFAULT_ERROR_SEARCH_LIMIT = 20;
-const DEFAULT_ERROR_CONTEXT = 2;
-const DEFAULT_ERROR_READ_LIMIT = 200;
-const DEFAULT_SERVER = "buildkite-remote";
-const CACHE_VERSION = 4;
+const DEFAULT_BKCI_PATH = process.env.BKCI_BIN || "bkci";
+const CACHE_VERSION = 5;
 const CACHE_DIR = path.join(os.tmpdir(), "pi-buildkite-playwright-failures");
 
 const USAGE = `Usage:
-  ./scripts/extract-playwright-failures.cjs --org ORG --pipeline PIPELINE --build BUILD_NUMBER
-  ./scripts/extract-playwright-failures.cjs --org ORG --pipeline PIPELINE --build BUILD_NUMBER --error-for "TEST_NAME" --job-id JOB_ID [--job-url URL] [--failed-line-row N]
+  ./scripts/extract-playwright-failures.cjs --org ORG --pipeline PIPELINE --build BUILD_NUMBER [--bkci-path PATH]
+  ./scripts/extract-playwright-failures.cjs --org ORG --pipeline PIPELINE --build BUILD_NUMBER --error-for "TEST_NAME" --job-id JOB_ID [--job-url URL] [--failed-line-row N] [--bkci-path PATH]
 
 Options:
-  --server NAME              MCP server name (default: ${DEFAULT_SERVER})
-  --pattern REGEX            Regex for the failed summary line (default: ${DEFAULT_PATTERN})
-  --search-limit N           Max matches to return from search_logs (default: ${DEFAULT_SEARCH_LIMIT})
-  --context N                Context lines around the summary search match (default: ${DEFAULT_CONTEXT})
-  --read-limit N             Lines to read from read_logs (default: ${DEFAULT_READ_LIMIT})
+  --bkci-path PATH           bkci executable path (default: ${DEFAULT_BKCI_PATH})
   --error-for TEST_NAME      Fetch error details for a single test (requires --job-id)
   --job-id ID                Buildkite job id for error lookup
   --job-url URL              Buildkite job URL for log links (optional)
   --failed-line-row N        Row number of the summary block (optional)
-  --error-search-limit N     Max matches to return for error search (default: ${DEFAULT_ERROR_SEARCH_LIMIT})
-  --error-context N          Context lines around the error match (default: ${DEFAULT_ERROR_CONTEXT})
-  --error-read-limit N       Lines to read around the error match (default: ${DEFAULT_ERROR_READ_LIMIT})
   -h, --help                 Show this help
 `;
 
 function parseArgs(argv) {
   const args = {
-    server: DEFAULT_SERVER,
-    pattern: DEFAULT_PATTERN,
-    searchLimit: DEFAULT_SEARCH_LIMIT,
-    context: DEFAULT_CONTEXT,
-    readLimit: DEFAULT_READ_LIMIT,
-    errorSearchLimit: DEFAULT_ERROR_SEARCH_LIMIT,
-    errorContext: DEFAULT_ERROR_CONTEXT,
-    errorReadLimit: DEFAULT_ERROR_READ_LIMIT,
+    bkciPath: DEFAULT_BKCI_PATH,
     errorFor: null,
     jobId: null,
     jobUrl: null,
@@ -74,29 +53,13 @@ function parseArgs(argv) {
         args.pipeline = next;
         i += 1;
         break;
-      case "--server":
-        args.server = next;
-        i += 1;
-        break;
       case "--build":
       case "--build-number":
         args.build = next;
         i += 1;
         break;
-      case "--pattern":
-        args.pattern = next;
-        i += 1;
-        break;
-      case "--search-limit":
-        args.searchLimit = toNumberOption("--search-limit", next);
-        i += 1;
-        break;
-      case "--context":
-        args.context = toNumberOption("--context", next);
-        i += 1;
-        break;
-      case "--read-limit":
-        args.readLimit = toNumberOption("--read-limit", next);
+      case "--bkci-path":
+        args.bkciPath = next;
         i += 1;
         break;
       case "--error-for":
@@ -116,16 +79,15 @@ function parseArgs(argv) {
         args.failedLineRow = toNonNegativeOption("--failed-line-row", next);
         i += 1;
         break;
+      // Legacy options kept for compatibility. They are ignored with bkci.
+      case "--server":
+      case "--pattern":
+      case "--search-limit":
+      case "--context":
+      case "--read-limit":
       case "--error-search-limit":
-        args.errorSearchLimit = toNumberOption("--error-search-limit", next);
-        i += 1;
-        break;
       case "--error-context":
-        args.errorContext = toNumberOption("--error-context", next);
-        i += 1;
-        break;
       case "--error-read-limit":
-        args.errorReadLimit = toNumberOption("--error-read-limit", next);
         i += 1;
         break;
       default:
@@ -134,17 +96,6 @@ function parseArgs(argv) {
   }
 
   return args;
-}
-
-function toNumberOption(label, value) {
-  if (!value) {
-    throw new Error(`missing value for ${label}`);
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    throw new Error(`invalid ${label}: ${value}`);
-  }
-  return parsed;
 }
 
 function toNonNegativeOption(label, value) {
@@ -181,29 +132,9 @@ function sanitizeKey(value) {
   return value.replace(/[^a-zA-Z0-9.-]+/g, "_");
 }
 
-function buildCachePath({ orgSlug, pipelineSlug, buildNumber, serverName }) {
-  const safe = [serverName, orgSlug, pipelineSlug, buildNumber].map(sanitizeKey).join("__");
+function buildCachePath({ orgSlug, pipelineSlug, buildNumber, bkciPath }) {
+  const safe = [bkciPath, orgSlug, pipelineSlug, buildNumber].map(sanitizeKey).join("__");
   return path.join(CACHE_DIR, `${safe}.json`);
-}
-
-function coerceString(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function extractBuildInfo(build, buildNumber) {
-  return {
-    number: build?.number !== undefined && build?.number !== null
-      ? String(build.number)
-      : String(buildNumber),
-    url: coerceString(build?.web_url),
-    branch: coerceString(build?.branch),
-    commit: coerceString(build?.commit),
-    message: coerceString(build?.message),
-  };
 }
 
 async function loadCache(cachePath) {
@@ -236,7 +167,7 @@ function areJobStatesEqual(left, right) {
   return leftKeys.every((key) => left[key] === right[key]);
 }
 
-function isCacheValid(cacheData, { orgSlug, pipelineSlug, buildNumber, serverName, jobStates }) {
+function isCacheValid(cacheData, { orgSlug, pipelineSlug, buildNumber, bkciPath, jobStates }) {
   if (!cacheData || cacheData.version !== CACHE_VERSION) {
     return false;
   }
@@ -247,7 +178,7 @@ function isCacheValid(cacheData, { orgSlug, pipelineSlug, buildNumber, serverNam
   if (meta.orgSlug !== orgSlug || meta.pipelineSlug !== pipelineSlug || meta.buildNumber !== buildNumber) {
     return false;
   }
-  if (meta.serverName !== serverName) {
+  if (meta.bkciPath !== bkciPath) {
     return false;
   }
   if (!meta.jobStates) {
@@ -256,179 +187,32 @@ function isCacheValid(cacheData, { orgSlug, pipelineSlug, buildNumber, serverNam
   return areJobStatesEqual(meta.jobStates, jobStates);
 }
 
-function escapeForFunctionString(value) {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
-}
-
-function buildkiteCallExpression({ server, tool, args }) {
-  const serializedArgs = Object.entries(args)
-    .map(([key, value]) => `${key}: ${serializeArg(value)}`)
-    .join(", ");
-  return `${server}.${tool}(${serializedArgs})`;
-}
-
-function serializeArg(value) {
-  if (typeof value === "string") {
-    return `"${escapeForFunctionString(value)}"`;
-  }
-  if (typeof value === "boolean" || typeof value === "number") {
-    return String(value);
-  }
-  throw new Error(`unsupported arg type: ${typeof value}`);
-}
-
-function selectPlaywrightJobs(build) {
-  if (!build || !Array.isArray(build.jobs)) {
-    throw new Error("build response is missing jobs array");
-  }
-  return build.jobs
-    .filter((job) => typeof job?.name === "string")
-    .filter((job) => job.name.toLowerCase().includes("playwright"))
-    .map((job) => {
-      const rawUrl = typeof job?.web_url === "string" ? job.web_url.trim() : "";
-      return {
-        id: job.id,
-        name: job.name,
-        state: job.state,
-        jobUrl: rawUrl ? rawUrl : null,
-      };
-    });
-}
-
-function filterFailedPlaywrightJobs(jobs) {
-  return jobs.filter((job) => job.state === "failed");
-}
-
-function findFailedSummaryRow(searchResults) {
-  const results = Array.isArray(searchResults?.results) ? searchResults.results : [];
-  for (const result of results) {
-    const content = stripAnsi(result?.match?.content ?? "");
-    if (/\b\d+\s+failed\b/i.test(content)) {
-      return result.match?.row_number ?? null;
-    }
-  }
-  return null;
-}
-
-function normalizeLogLine(text) {
-  return stripAnsi(text ?? "").trim();
-}
-
-function normalizeLogLinePreserveIndent(text) {
-  return stripAnsi(text ?? "").replace(/\r$/, "").trimEnd();
-}
-
-function buildLogEntries(entries, startRow, preserveIndent) {
-  return (entries ?? []).map((entry, index) => {
-    const row = typeof entry?.r === "number"
-      ? entry.r
-      : typeof entry?.row === "number"
-        ? entry.row
-        : (startRow ?? 0) + index;
-    const text = preserveIndent
-      ? normalizeLogLinePreserveIndent(entry?.c ?? "")
-      : normalizeLogLine(entry?.c ?? "");
-    return { text, row };
-  });
-}
-
-function extractFailedTests(entries, startRow) {
-  const lines = buildLogEntries(entries, startRow, false);
-  const failedLineIndex = lines.findIndex((line) => /\b\d+\s+failed\b/i.test(line.text));
-  if (failedLineIndex === -1) {
-    return { failedLine: null, failedLineRow: null, tests: [], testEntries: [] };
-  }
-
-  const failedLine = lines[failedLineIndex].text;
-  const failedLineRow = lines[failedLineIndex].row;
-  const tests = [];
-  const testEntries = [];
-
-  for (let i = failedLineIndex + 1; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (!line.text) {
-      continue;
-    }
-    if (/\b\d+\s+(flaky|skipped|passed)\b/i.test(line.text)) {
-      break;
-    }
-    tests.push(line.text);
-    testEntries.push({ name: line.text, row: line.row });
-  }
-
-  return { failedLine, failedLineRow, tests, testEntries };
-}
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function buildTestSearchPattern(testName) {
-  return escapeRegex(testName);
-}
-
-function findTestMatchRow(searchResults, failedLineRow) {
-  const results = Array.isArray(searchResults?.results) ? searchResults.results : [];
-  const rows = results
-    .map((result) => result?.match?.row_number)
-    .filter((row) => typeof row === "number");
-  const filtered = failedLineRow === null || failedLineRow === undefined
-    ? rows
-    : rows.filter((row) => row < failedLineRow);
-  if (filtered.length === 0) {
+function coerceString(value) {
+  if (typeof value !== "string") {
     return null;
   }
-  return Math.max(...filtered);
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
 }
 
-function isTestHeaderLine(text) {
-  return /^\[[^\]]+\]\s+›/.test(text);
-}
-
-function isSummarySectionLine(text) {
-  return /\b\d+\s+(failed|flaky|skipped|passed)\b/i.test(text);
-}
-
-function isRetryLine(text) {
-  return /^Retry\s+#\d+/i.test(text);
-}
-
-function extractErrorBlock(entries, startRow, matchRow, testName) {
-  const lines = buildLogEntries(entries, startRow, true);
-  let startIndex = lines.findIndex((line) => line.row === matchRow);
-  if (startIndex === -1) {
-    startIndex = lines.findIndex((line) => line.text.includes(testName));
-  }
-  if (startIndex === -1) {
-    return { startRow: null, endRow: null, lines: [] };
-  }
-
-  const output = [];
-  for (let i = startIndex; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (i > startIndex) {
-      if (isTestHeaderLine(line.text) || isSummarySectionLine(line.text) || isRetryLine(line.text)) {
-        break;
-      }
-    }
-    output.push(line);
-  }
-
-  while (output.length > 0 && output[output.length - 1].text.trim() === "") {
-    output.pop();
-  }
-
-  const startRowValue = output[0]?.row ?? null;
-  const endRowValue = output[output.length - 1]?.row ?? null;
+function extractBuildInfo(build, buildNumber) {
   return {
-    startRow: startRowValue,
-    endRow: endRowValue,
-    lines: output.map((line) => line.text),
+    number: build?.number !== undefined && build?.number !== null
+      ? String(build.number)
+      : String(buildNumber),
+    url: coerceString(build?.web_url),
+    branch: coerceString(build?.branch),
+    commit: coerceString(build?.commit),
+    message: coerceString(build?.message),
   };
 }
 
-function stripAnsi(text) {
-  return text.replace(/\u001b\[[0-9;]*m/g, "");
+function normalizeLogLine(text) {
+  return String(text ?? "").trim();
+}
+
+function normalizeLogLinePreserveIndent(text) {
+  return String(text ?? "").replace(/\r$/, "").trimEnd();
 }
 
 function normalizeTestName(line) {
@@ -456,20 +240,131 @@ function normalizeJobLabel(jobName) {
   return isIframe ? `${base} (iframe)` : base;
 }
 
-function extractErrorMessage(result) {
-  if (!result || typeof result !== "object") {
-    return "unknown error";
+function selectPlaywrightJobs(build) {
+  if (!build || !Array.isArray(build.jobs)) {
+    throw new Error("build response is missing jobs array");
   }
-  if (Array.isArray(result.content)) {
-    const textEntry = result.content.find((entry) => entry?.type === "text");
-    if (textEntry?.text) {
-      return textEntry.text;
+  return build.jobs
+    .filter((job) => typeof job?.name === "string")
+    .filter((job) => job.name.toLowerCase().includes("playwright"))
+    .map((job) => {
+      const rawUrl = typeof job?.web_url === "string" ? job.web_url.trim() : "";
+      return {
+        id: job.id,
+        name: job.name,
+        state: job.state,
+        jobUrl: rawUrl ? rawUrl : null,
+      };
+    });
+}
+
+function filterFailedPlaywrightJobs(jobs) {
+  return jobs.filter((job) => job.state === "failed");
+}
+
+function splitLogContent(content) {
+  return String(content ?? "").split("\n");
+}
+
+function findFailedSummaryRow(lines) {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const content = normalizeLogLine(lines[i]);
+    if (/\b\d+\s+failed\b/i.test(content)) {
+      return i + 1;
     }
   }
-  if (typeof result.error === "string") {
-    return result.error;
+  return null;
+}
+
+function extractFailedTests(lines) {
+  const failedLineRow = findFailedSummaryRow(lines);
+  if (failedLineRow === null) {
+    return { failedLine: null, failedLineRow: null, tests: [], testEntries: [] };
   }
-  return "unknown error";
+
+  const failedIndex = failedLineRow - 1;
+  const failedLine = normalizeLogLine(lines[failedIndex]);
+  const tests = [];
+  const testEntries = [];
+
+  for (let i = failedIndex + 1; i < lines.length; i += 1) {
+    const line = normalizeLogLine(lines[i]);
+    if (!line) {
+      continue;
+    }
+    if (/\b\d+\s+(flaky|skipped|passed)\b/i.test(line)) {
+      break;
+    }
+    tests.push(line);
+    testEntries.push({ name: line, row: i + 1 });
+  }
+
+  return { failedLine, failedLineRow, tests, testEntries };
+}
+
+function isTestHeaderLine(text) {
+  return /^\[[^\]]+\]\s+›/.test(text);
+}
+
+function isSummarySectionLine(text) {
+  return /\b\d+\s+(failed|flaky|skipped|passed)\b/i.test(text);
+}
+
+function isRetryLine(text) {
+  return /^Retry\s+#\d+/i.test(text);
+}
+
+function findTestMatchRow(lines, testName, failedLineRow) {
+  const rows = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const text = normalizeLogLinePreserveIndent(lines[i]);
+    if (!text.includes(testName)) {
+      continue;
+    }
+    const row = i + 1;
+    if (failedLineRow !== null && row >= failedLineRow) {
+      continue;
+    }
+    rows.push(row);
+  }
+
+  if (rows.length === 0) {
+    return null;
+  }
+  return Math.max(...rows);
+}
+
+function extractErrorBlock(lines, matchRow, testName) {
+  let startIndex = matchRow - 1;
+  if (startIndex < 0 || startIndex >= lines.length) {
+    startIndex = lines.findIndex((line) => normalizeLogLinePreserveIndent(line).includes(testName));
+  }
+  if (startIndex === -1) {
+    return { startRow: null, endRow: null, lines: [] };
+  }
+
+  const output = [];
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const text = normalizeLogLinePreserveIndent(lines[i]);
+    if (i > startIndex) {
+      if (isTestHeaderLine(text) || isSummarySectionLine(text) || isRetryLine(text)) {
+        break;
+      }
+    }
+    output.push({ row: i + 1, text });
+  }
+
+  while (output.length > 0 && output[output.length - 1].text.trim() === "") {
+    output.pop();
+  }
+
+  const startRow = output[0]?.row ?? null;
+  const endRow = output[output.length - 1]?.row ?? null;
+  return {
+    startRow,
+    endRow,
+    lines: output.map((line) => line.text),
+  };
 }
 
 function buildTestFailureMap(jobResults) {
@@ -488,7 +383,6 @@ function buildTestFailureMap(jobResults) {
   }
   return map;
 }
-
 
 function sortLabels(labels) {
   const baseOrder = ["chromium", "mobile", "firefox", "webkit"];
@@ -543,109 +437,102 @@ function buildSummaryData(jobResults) {
   };
 }
 
-async function mcporterCall(server, tool, args) {
-  const expression = buildkiteCallExpression({ server, tool, args });
-  const { stdout, stderr } = await execFileAsync(
-    "mcporter",
-    ["call", expression, "--output", "json"],
-    { maxBuffer: 1024 * 1024 * 10 }
-  );
-
-  if (stderr?.trim()) {
-    process.stderr.write(stderr);
-  }
-
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(trimmed);
-  } catch (error) {
-    throw new Error(`failed to parse mcporter output: ${error.message}`);
-  }
+function getBuildkiteJobUrl(orgSlug, pipelineSlug, buildNumber, jobId) {
+  const base = `https://buildkite.com/${orgSlug}/${pipelineSlug}/builds/${buildNumber}`;
+  return jobId ? `${base}#${jobId}` : base;
 }
 
-async function fetchBuild({ orgSlug, pipelineSlug, buildNumber, serverName }) {
-  let build;
+async function runBkciJson(bkciPath, args) {
+  let result;
   try {
-    build = await mcporterCall(serverName, "get_build", {
-      org_slug: orgSlug,
-      pipeline_slug: pipelineSlug,
-      build_number: buildNumber,
-      detail_level: "full",
-    });
+    result = await execFileAsync(bkciPath, args, { maxBuffer: 1024 * 1024 * 25 });
   } catch (error) {
-    throw new Error(error.message);
+    const stderr = error?.stderr?.toString().trim();
+    const stdout = error?.stdout?.toString().trim();
+    const detail = stderr || stdout || error.message;
+    if (detail.includes("ENOENT") || /spawn .* ENOENT/i.test(detail)) {
+      throw new Error("bkci not found. install from a local checkout: clone buildkite-cli, run 'pnpm install && pnpm run build', then 'npm link'");
+    }
+    throw new Error(detail);
   }
 
-  if (build?.isError) {
-    throw new Error(extractErrorMessage(build));
+  const output = result.stdout?.trim();
+  if (!output) {
+    throw new Error("bkci returned empty output");
   }
 
-  return build;
+  let envelope;
+  try {
+    envelope = JSON.parse(output);
+  } catch (error) {
+    throw new Error(`failed to parse bkci output: ${error.message}`);
+  }
+
+  if (!envelope || typeof envelope !== "object") {
+    throw new Error("bkci returned invalid payload");
+  }
+
+  if (!envelope.ok) {
+    const message = envelope?.error?.message || "bkci request failed";
+    throw new Error(message);
+  }
+
+  return envelope;
+}
+
+async function fetchBuild({ orgSlug, pipelineSlug, buildNumber, bkciPath }) {
+  const envelope = await runBkciJson(bkciPath, [
+    "--raw",
+    "builds",
+    "get",
+    "--org",
+    orgSlug,
+    "--pipeline",
+    pipelineSlug,
+    "--build",
+    String(buildNumber),
+  ]);
+
+  return envelope.data;
+}
+
+async function fetchJobLog({ orgSlug, pipelineSlug, buildNumber, jobId, bkciPath }) {
+  const envelope = await runBkciJson(bkciPath, [
+    "jobs",
+    "log",
+    "get",
+    "--org",
+    orgSlug,
+    "--pipeline",
+    pipelineSlug,
+    "--build",
+    String(buildNumber),
+    "--job",
+    jobId,
+  ]);
+
+  return envelope?.data?.content ?? "";
 }
 
 async function fetchErrorPayload({
   orgSlug,
   pipelineSlug,
   buildNumber,
-  serverName,
+  bkciPath,
   testName,
   jobId,
   jobUrl,
   failedLineRow,
-  searchLimit,
-  context,
-  readLimit,
 }) {
-  const pattern = buildTestSearchPattern(testName);
-  let searchResults;
-  try {
-    searchResults = await mcporterCall(serverName, "search_logs", {
-      org_slug: orgSlug,
-      pipeline_slug: pipelineSlug,
-      build_number: buildNumber,
-      job_id: jobId,
-      pattern,
-      reverse: true,
-      limit: searchLimit,
-      context,
-    });
-  } catch (error) {
-    throw new Error(`failed to search logs: ${error.message}`);
-  }
+  const logContent = await fetchJobLog({ orgSlug, pipelineSlug, buildNumber, jobId, bkciPath });
+  const lines = splitLogContent(logContent);
 
-  if (searchResults?.isError) {
-    throw new Error(`failed to search logs: ${extractErrorMessage(searchResults)}`);
-  }
-
-  const matchRow = findTestMatchRow(searchResults, failedLineRow ?? null);
+  const matchRow = findTestMatchRow(lines, testName, failedLineRow ?? null);
   if (matchRow === null) {
     throw new Error("no matching log entry found for test");
   }
 
-  const seekRow = Math.max(matchRow - context, 0);
-  let logSlice;
-  try {
-    logSlice = await mcporterCall(serverName, "read_logs", {
-      org_slug: orgSlug,
-      pipeline_slug: pipelineSlug,
-      build_number: buildNumber,
-      job_id: jobId,
-      seek: seekRow,
-      limit: readLimit,
-    });
-  } catch (error) {
-    throw new Error(`failed to read logs: ${error.message}`);
-  }
-
-  if (logSlice?.isError) {
-    throw new Error(`failed to read logs: ${extractErrorMessage(logSlice)}`);
-  }
-
-  const errorBlock = extractErrorBlock(logSlice?.entries ?? [], seekRow, matchRow, testName);
+  const errorBlock = extractErrorBlock(lines, matchRow, testName);
   if (errorBlock.lines.length === 0) {
     throw new Error("failed to extract error block for test");
   }
@@ -686,20 +573,28 @@ async function main() {
   const orgSlug = args.org;
   const pipelineSlug = args.pipeline;
   const buildNumber = String(args.build);
-  const serverName = args.server;
+  const bkciPath = args.bkciPath;
 
   if (args.errorFor) {
     let buildInfo = null;
+    let resolvedJobUrl = args.jobUrl || null;
     try {
       const build = await fetchBuild({
         orgSlug,
         pipelineSlug,
         buildNumber,
-        serverName,
+        bkciPath,
       });
       buildInfo = extractBuildInfo(build, buildNumber);
+
+      const jobs = Array.isArray(build?.jobs) ? build.jobs : [];
+      const matchedJob = jobs.find((job) => job?.id === args.jobId);
+      if (!resolvedJobUrl && matchedJob?.web_url) {
+        resolvedJobUrl = matchedJob.web_url;
+      }
     } catch {
       buildInfo = null;
+      resolvedJobUrl = resolvedJobUrl || getBuildkiteJobUrl(orgSlug, pipelineSlug, buildNumber, args.jobId);
     }
 
     try {
@@ -707,14 +602,11 @@ async function main() {
         orgSlug,
         pipelineSlug,
         buildNumber,
-        serverName,
+        bkciPath,
         testName: args.errorFor,
         jobId: args.jobId,
-        jobUrl: args.jobUrl,
+        jobUrl: resolvedJobUrl,
         failedLineRow: args.failedLineRow,
-        searchLimit: args.errorSearchLimit,
-        context: args.errorContext,
-        readLimit: args.errorReadLimit,
       });
       const output = {
         ...errorPayload,
@@ -735,7 +627,7 @@ async function main() {
       orgSlug,
       pipelineSlug,
       buildNumber,
-      serverName,
+      bkciPath,
     });
   } catch (error) {
     console.error(`Failed to fetch build: ${error.message}`);
@@ -759,10 +651,11 @@ async function main() {
     orgSlug,
     pipelineSlug,
     buildNumber,
-    serverName,
+    bkciPath,
   });
+
   const cached = await loadCache(cachePath);
-  if (cached && isCacheValid(cached, { orgSlug, pipelineSlug, buildNumber, serverName, jobStates })) {
+  if (cached && isCacheValid(cached, { orgSlug, pipelineSlug, buildNumber, bkciPath, jobStates })) {
     const payload = {
       ...cached.payload,
       build: cached.payload.build ?? buildInfo,
@@ -781,118 +674,54 @@ async function main() {
   const jobResults = [];
 
   for (const job of jobs) {
-    let searchResults;
+    let logContent;
     try {
-      searchResults = await mcporterCall(serverName, "search_logs", {
-        org_slug: orgSlug,
-        pipeline_slug: pipelineSlug,
-        build_number: buildNumber,
-        job_id: job.id,
-        pattern: args.pattern,
-        reverse: true,
-        limit: args.searchLimit,
-        context: args.context,
+      logContent = await fetchJobLog({
+        orgSlug,
+        pipelineSlug,
+        buildNumber,
+        jobId: job.id,
+        bkciPath,
       });
     } catch (error) {
       jobResults.push({
         jobName: job.name,
         jobId: job.id,
-        jobUrl: job.jobUrl,
+        jobUrl: job.jobUrl || getBuildkiteJobUrl(orgSlug, pipelineSlug, buildNumber, job.id),
         label: normalizeJobLabel(job.name),
         state: job.state,
         failedLine: null,
         failedLineRow: null,
         tests: [],
         testEntries: [],
-        error: `Failed to search logs: ${error.message}`,
+        error: `Failed to fetch log: ${error.message}`,
       });
       continue;
     }
 
-    if (searchResults?.isError) {
+    const lines = splitLogContent(logContent);
+    const { failedLine, failedLineRow, tests, testEntries } = extractFailedTests(lines);
+
+    if (failedLineRow === null) {
       jobResults.push({
         jobName: job.name,
         jobId: job.id,
-        jobUrl: job.jobUrl,
+        jobUrl: job.jobUrl || getBuildkiteJobUrl(orgSlug, pipelineSlug, buildNumber, job.id),
         label: normalizeJobLabel(job.name),
         state: job.state,
         failedLine: null,
         failedLineRow: null,
         tests: [],
         testEntries: [],
-        error: `Failed to search logs: ${extractErrorMessage(searchResults)}`,
+        error: "No failed summary line found in job log.",
       });
       continue;
     }
 
-    const summaryRow = findFailedSummaryRow(searchResults);
-    if (summaryRow === null) {
-      jobResults.push({
-        jobName: job.name,
-        jobId: job.id,
-        jobUrl: job.jobUrl,
-        label: normalizeJobLabel(job.name),
-        state: job.state,
-        failedLine: null,
-        failedLineRow: null,
-        tests: [],
-        testEntries: [],
-        error: "No failed summary line found in search results.",
-      });
-      continue;
-    }
-
-    const seekRow = Math.max(summaryRow - 3, 0);
-    let logSlice;
-    try {
-      logSlice = await mcporterCall(serverName, "read_logs", {
-        org_slug: orgSlug,
-        pipeline_slug: pipelineSlug,
-        build_number: buildNumber,
-        job_id: job.id,
-        seek: seekRow,
-        limit: args.readLimit,
-      });
-    } catch (error) {
-      jobResults.push({
-        jobName: job.name,
-        jobId: job.id,
-        jobUrl: job.jobUrl,
-        label: normalizeJobLabel(job.name),
-        state: job.state,
-        failedLine: null,
-        failedLineRow: null,
-        tests: [],
-        testEntries: [],
-        error: `Failed to read logs: ${error.message}`,
-      });
-      continue;
-    }
-
-    if (logSlice?.isError) {
-      jobResults.push({
-        jobName: job.name,
-        jobId: job.id,
-        jobUrl: job.jobUrl,
-        label: normalizeJobLabel(job.name),
-        state: job.state,
-        failedLine: null,
-        failedLineRow: null,
-        tests: [],
-        testEntries: [],
-        error: `Failed to read logs: ${extractErrorMessage(logSlice)}`,
-      });
-      continue;
-    }
-
-    const { failedLine, failedLineRow, tests, testEntries } = extractFailedTests(
-      logSlice?.entries ?? [],
-      seekRow
-    );
     jobResults.push({
       jobName: job.name,
       jobId: job.id,
-      jobUrl: job.jobUrl,
+      jobUrl: job.jobUrl || getBuildkiteJobUrl(orgSlug, pipelineSlug, buildNumber, job.id),
       label: normalizeJobLabel(job.name),
       state: job.state,
       failedLine,
@@ -923,7 +752,7 @@ async function main() {
       orgSlug,
       pipelineSlug,
       buildNumber,
-      serverName,
+      bkciPath,
       cachedAt,
       jobStates,
     },
@@ -935,7 +764,6 @@ async function main() {
   });
 
   console.log(JSON.stringify(payload, null, 2));
-  return;
 }
 
 main().catch((error) => {
