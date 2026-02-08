@@ -7,7 +7,6 @@ Shared pi skills and extensions used by the team. Add this repo as a local packa
 ### Skills
 
 - `buildkite-cli` — use the local `bkci` CLI for LLM-friendly Buildkite JSON (builds, logs, artifacts, auth scopes).
-- `buildkite-mcp` — use mcporter to call the Buildkite MCP server.
 - `buildkite-playwright-failures` — extract failed-only Playwright tests from Buildkite logs.
 - `gh-address-comments` — fetch PR review comments, apply fixes with build verification, and commit each fix atomically. *(Derived from [skills.sh](https://skills.sh/openai/skills/gh-address-comments), Apache 2.0)*
 - `github` — use the `gh` CLI for issues, PRs, and runs.
