@@ -1,49 +1,45 @@
 ---
 name: buildkite-cli
-description: "Use the local bkci CLI to query Buildkite builds, logs, artifacts, and token scope status with LLM-friendly JSON output."
+description: "Use the bkci CLI to query Buildkite builds, logs, artifacts, and token scope status with LLM-friendly JSON output."
 ---
 
 # Buildkite CLI (`bkci`)
 
-Use this skill when you want CI data from Buildkite through the local `bkci` utility.
+Use this skill when you want CI data from Buildkite through the `bkci` utility.
 
 This is a good default when you need structured JSON output that is easy for agents to parse.
 
-## Tool location
+## Install from GitHub
 
-Repository:
+Use the public repo and install it in any directory (do not assume a machine-specific path):
 
 ```bash
-~/Work/buildkite-cli
+BKCI_DIR="${BKCI_DIR:-$HOME/.local/share/buildkite-cli}"
+
+if [ ! -d "$BKCI_DIR/.git" ]; then
+  git clone https://github.com/PSPDFKit-labs/buildkite-cli "$BKCI_DIR"
+fi
+
+cd "$BKCI_DIR"
+pnpm install
+pnpm run build
 ```
 
-Run commands from that repo with either:
+## Running the CLI
+
+From the clone directory:
 
 ```bash
 node dist/index.js ...
 ```
 
-or
+or:
 
 ```bash
 pnpm exec tsx src/index.ts ...
 ```
 
-## Setup
-
-If the repo is not present yet:
-
-```bash
-git clone https://github.com/PSPDFKit-labs/buildkite-cli ~/Work/buildkite-cli
-```
-
-Install and build:
-
-```bash
-cd ~/Work/buildkite-cli
-pnpm install
-pnpm run build
-```
+If `bkci` is already on `PATH`, you can call it directly.
 
 ## Authentication
 
@@ -62,7 +58,6 @@ Required scopes:
 Validate token/scopes first:
 
 ```bash
-cd ~/Work/buildkite-cli
 node dist/index.js auth status
 ```
 
