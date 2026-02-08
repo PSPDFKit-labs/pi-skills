@@ -49,12 +49,6 @@ Validate token/scopes first:
 bkci auth status
 ```
 
-For local 1Password usage, this is commonly used:
-
-```bash
-export BUILDKITE_TOKEN="$(op read 'op://Employee/Buildkite Agent Token/credential')"
-```
-
 ## Common commands
 
 List builds:
