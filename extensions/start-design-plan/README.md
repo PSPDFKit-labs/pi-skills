@@ -2,6 +2,9 @@
 
 Adds a Claude-style `/start-design-plan` workflow to pi without relying on a separate skill.
 
+This extension is a pi port of concepts/workflows from Ed Ropple's `ed3d-plan-and-execute` plugin set:
+https://github.com/ed3dai/ed3d-plugins
+
 ## Features
 
 - `/start-design-plan` command

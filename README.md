@@ -20,7 +20,7 @@ Shared pi skills and extensions used by the team. Add this repo as a local packa
 - `cronjob` — `/cron` command for scheduled prompts (cron expressions), optional job names, and queued runs while busy.
 - `loop` — `/loop` command that keeps a follow-up loop running until a breakout condition is met.
 - `notify` — desktop notification when the agent finishes and waits for input.
-- `start-design-plan` — Claude-style design workflow extension with `/start-design-plan` and `/resume-design-plan`, plus `ask_user_question` and `design_plan_tracker` tools.
+- `start-design-plan` — Claude-style design workflow extension with `/start-design-plan` and `/resume-design-plan`, plus `ask_user_question` and `design_plan_tracker` tools. Ported from concepts in `ed3d-plan-and-execute` (`https://github.com/ed3dai/ed3d-plugins`).
 
 ## Usage
 
