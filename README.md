@@ -20,6 +20,7 @@ Shared pi skills and extensions used by the team. Add this repo as a local packa
 - `cronjob` — `/cron` command for scheduled prompts (cron expressions), optional job names, and queued runs while busy.
 - `loop` — `/loop` command that keeps a follow-up loop running until a breakout condition is met.
 - `notify` — desktop notification when the agent finishes and waits for input.
+- `pi-skills-update-checker` — checks for new commits on startup and shows a widget when updates are available.
 
 ## Usage
 
