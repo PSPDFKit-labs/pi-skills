@@ -1,3 +1,4 @@
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	DEFAULT_GUARDRAIL_MODE,
@@ -80,6 +81,63 @@ function formatConfigSummary(config: DesignPlanConfig): string {
 	].join(" • ");
 }
 
+type SelectOption<TValue> = {
+	readonly label: string;
+	readonly value: TValue;
+};
+
+async function selectOption<TValue>(options: {
+	readonly ctx: ExtensionContext;
+	readonly title: string;
+	readonly items: ReadonlyArray<SelectOption<TValue>>;
+}): Promise<TValue | undefined> {
+	if (!options.ctx.hasUI) return undefined;
+	if (options.items.length === 0) return undefined;
+
+	const labels = options.items.map((item) => item.label);
+	const selected = await options.ctx.ui.select(options.title, labels);
+	if (!selected) return undefined;
+
+	const index = labels.findIndex((label) => label === selected);
+	if (index < 0) return undefined;
+	return options.items[index].value;
+}
+
+function buildModelSelectorOptions(options: {
+	readonly availableModels: ReadonlyArray<Model<Api>>;
+	readonly currentModel: string | null;
+}): ReadonlyArray<SelectOption<string | null>> {
+	const byId = new Map<string, Model<Api>>();
+	for (const model of options.availableModels) {
+		if (!byId.has(model.id)) {
+			byId.set(model.id, model);
+		}
+	}
+
+	const sortedModels = Array.from(byId.values()).sort((left, right) => {
+		const providerCompare = left.provider.localeCompare(right.provider);
+		if (providerCompare !== 0) return providerCompare;
+		return left.name.localeCompare(right.name);
+	});
+
+	const items: Array<SelectOption<string | null>> = [
+		{ label: "Default (no model override)", value: null },
+		...sortedModels.map((model) => ({
+			label: `${model.provider}/${model.id} — ${model.name}`,
+			value: model.id,
+		})),
+	];
+
+	if (options.currentModel && !byId.has(options.currentModel)) {
+		items.splice(1, 0, {
+			label: `Current custom model (${options.currentModel})`,
+			value: options.currentModel,
+		});
+	}
+
+	return items;
+}
+
 export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 	let state: DesignTrackerState | null = null;
 	let guardrailMode: GuardrailMode = DEFAULT_GUARDRAIL_MODE;
@@ -95,6 +153,17 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 
 	const setConfig = (next: DesignPlanConfig): void => {
 		config = next;
+	};
+
+	const saveConfig = (next: DesignPlanConfig): void => {
+		setConfig(next);
+		persistDesignPlanConfig(pi, next);
+	};
+
+	const applyConfigPatch = (patch: Partial<Omit<DesignPlanConfig, "version">>): DesignPlanConfig => {
+		const next = withDesignPlanConfigPatch({ config, patch });
+		saveConfig(next);
+		return next;
 	};
 
 	const onSessionEvent = (ctx: ExtensionContext): void => {
@@ -251,12 +320,85 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("design-plan-config", {
 		description:
-			"Configure start-design-plan defaults (usage: /design-plan-config [status|reset|model <id|default>|max-agents <1-4>|include-internet <on|off>])",
+			"Configure start-design-plan defaults. No args opens interactive UI. Text mode: [status|reset|model <id|default>|max-agents <1-4>|include-internet <on|off>]",
 		handler: async (args, ctx) => {
 			const tokens = args
 				.trim()
 				.split(/\s+/)
 				.filter((token) => token.length > 0);
+
+			if (tokens.length === 0 && ctx.hasUI) {
+				const action = await selectOption({
+					ctx,
+					title: `Design plan config (${formatConfigSummary(config)})`,
+					items: [
+						{ label: "Set research model", value: "model" as const },
+						{ label: "Set max research agents", value: "max-agents" as const },
+						{ label: "Toggle include internet", value: "include-internet" as const },
+						{ label: "Reset defaults", value: "reset" as const },
+						{ label: "Show current status", value: "status" as const },
+					],
+				});
+				if (!action) return;
+
+				if (action === "model") {
+					const modelOptions = buildModelSelectorOptions({
+						availableModels: ctx.modelRegistry.getAvailable(),
+						currentModel: config.researchModel,
+					});
+					const selectedModel = await selectOption({
+						ctx,
+						title: "Select research model",
+						items: modelOptions,
+					});
+					if (selectedModel === undefined) return;
+					const next = applyConfigPatch({ researchModel: selectedModel });
+					ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+					return;
+				}
+
+				if (action === "max-agents") {
+					const selectedMaxAgents = await selectOption({
+						ctx,
+						title: "Select max research agents",
+						items: [
+							{ label: "1", value: 1 },
+							{ label: "2", value: 2 },
+							{ label: "3", value: 3 },
+							{ label: "4", value: 4 },
+						],
+					});
+					if (selectedMaxAgents === undefined) return;
+					const next = applyConfigPatch({ researchMaxAgents: selectedMaxAgents });
+					ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+					return;
+				}
+
+				if (action === "include-internet") {
+					const selectedIncludeInternet = await selectOption({
+						ctx,
+						title: "Include internet research by default?",
+						items: [
+							{ label: "On", value: true },
+							{ label: "Off", value: false },
+						],
+					});
+					if (selectedIncludeInternet === undefined) return;
+					const next = applyConfigPatch({ researchIncludeInternet: selectedIncludeInternet });
+					ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+					return;
+				}
+
+				if (action === "reset") {
+					saveConfig(DEFAULT_DESIGN_PLAN_CONFIG);
+					ctx.ui.notify(`Design-plan config reset: ${formatConfigSummary(DEFAULT_DESIGN_PLAN_CONFIG)}`, "info");
+					return;
+				}
+
+				ctx.ui.notify(`Design-plan config: ${formatConfigSummary(config)}`, "info");
+				return;
+			}
+
 			const action = tokens[0]?.toLowerCase() ?? "status";
 
 			if (action === "status") {
@@ -265,14 +407,29 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 			}
 
 			if (action === "reset") {
-				setConfig(DEFAULT_DESIGN_PLAN_CONFIG);
-				persistDesignPlanConfig(pi, DEFAULT_DESIGN_PLAN_CONFIG);
+				saveConfig(DEFAULT_DESIGN_PLAN_CONFIG);
 				ctx.ui.notify(`Design-plan config reset: ${formatConfigSummary(DEFAULT_DESIGN_PLAN_CONFIG)}`, "info");
 				return;
 			}
 
 			if (action === "model") {
 				const modelValue = tokens.slice(1).join(" ").trim();
+				if (modelValue.length === 0 && ctx.hasUI) {
+					const modelOptions = buildModelSelectorOptions({
+						availableModels: ctx.modelRegistry.getAvailable(),
+						currentModel: config.researchModel,
+					});
+					const selectedModel = await selectOption({
+						ctx,
+						title: "Select research model",
+						items: modelOptions,
+					});
+					if (selectedModel === undefined) return;
+					const next = applyConfigPatch({ researchModel: selectedModel });
+					ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+					return;
+				}
+
 				const nextModel =
 					modelValue.length === 0 ||
 					modelValue.toLowerCase() === "default" ||
@@ -280,45 +437,62 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 					modelValue.toLowerCase() === "null"
 						? null
 						: modelValue;
-				const next = withDesignPlanConfigPatch({
-					config,
-					patch: { researchModel: nextModel },
-				});
-				setConfig(next);
-				persistDesignPlanConfig(pi, next);
+				const next = applyConfigPatch({ researchModel: nextModel });
 				ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
 				return;
 			}
 
 			if (action === "max-agents") {
+				if (!tokens[1] && ctx.hasUI) {
+					const selectedMaxAgents = await selectOption({
+						ctx,
+						title: "Select max research agents",
+						items: [
+							{ label: "1", value: 1 },
+							{ label: "2", value: 2 },
+							{ label: "3", value: 3 },
+							{ label: "4", value: 4 },
+						],
+					});
+					if (selectedMaxAgents === undefined) return;
+					const next = applyConfigPatch({ researchMaxAgents: selectedMaxAgents });
+					ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+					return;
+				}
+
 				const raw = tokens[1] ?? "";
 				const parsed = Number.parseInt(raw, 10);
 				if (!Number.isFinite(parsed) || parsed < 1 || parsed > 4) {
 					ctx.ui.notify("Invalid max-agents. Use a number between 1 and 4.", "warning");
 					return;
 				}
-				const next = withDesignPlanConfigPatch({
-					config,
-					patch: { researchMaxAgents: parsed },
-				});
-				setConfig(next);
-				persistDesignPlanConfig(pi, next);
+				const next = applyConfigPatch({ researchMaxAgents: parsed });
 				ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
 				return;
 			}
 
 			if (action === "include-internet") {
+				if (!tokens[1] && ctx.hasUI) {
+					const selectedIncludeInternet = await selectOption({
+						ctx,
+						title: "Include internet research by default?",
+						items: [
+							{ label: "On", value: true },
+							{ label: "Off", value: false },
+						],
+					});
+					if (selectedIncludeInternet === undefined) return;
+					const next = applyConfigPatch({ researchIncludeInternet: selectedIncludeInternet });
+					ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+					return;
+				}
+
 				const value = parseBooleanArg(tokens[1] ?? "");
 				if (value === null) {
 					ctx.ui.notify("Invalid include-internet value. Use on/off.", "warning");
 					return;
 				}
-				const next = withDesignPlanConfigPatch({
-					config,
-					patch: { researchIncludeInternet: value },
-				});
-				setConfig(next);
-				persistDesignPlanConfig(pi, next);
+				const next = applyConfigPatch({ researchIncludeInternet: value });
 				ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
 				return;
 			}

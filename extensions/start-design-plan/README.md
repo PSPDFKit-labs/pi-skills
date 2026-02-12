@@ -81,6 +81,9 @@ Optional guidance is passed through as additional instruction for the resumed ru
 
 Configures default behavior for research fanout tool calls made during the design workflow.
 
+- With no arguments (interactive UI mode), opens a config menu with a model selector.
+- With arguments, supports scriptable text commands.
+
 Defaults:
 - `model=default`
 - `maxAgents=3`
