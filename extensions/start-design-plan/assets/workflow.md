@@ -32,10 +32,20 @@ You are running an orchestrated design workflow. Follow this five-phase sequence
   - Use findings to reduce low-value questions and ground trade-off discussion.
 - Research goal composition — goals MUST cover three perspectives:
   1. **Internal (codebase):** Map current implementation, identify code paths, find existing patterns.
+     - Example: "Map the current PDF loading path and identify where range requests are made"
+     - Example: "Find existing error handling patterns in the auth module"
   2. **Domain (specification/theory):** Research the underlying spec, protocol, or standard that governs the problem. Ask "how does X work at the spec level?" and "what data structures / fields / mechanisms does the spec provide that we might not be using?"
+     - Example: "Research the PDF linearization specification — what data is in the linearization dictionary? What fields indicate where first-page data ends?"
+     - Example: "Research the OAuth 2.0 PKCE spec — what's the exact flow and what security properties does it provide?"
   3. **External (competitors/best practices):** Research how other implementations solve the same problem. Ask "what do competitors do?", "what are known best practices?", "what are common pitfalls?"
+     - Example: "How do PDF.js, PDFium, and other viewers optimize linearized PDF loading for fast first-page render?"
+     - Example: "What are known best practices for implementing progressive image loading in web apps?"
   - If you write only internal goals, you will miss optimizations visible only through spec knowledge or competitor analysis.
   - The internet-researcher role exists specifically for goals 2 and 3 — give it domain-level and external research work, not instrumentation tasks.
+  - **Goal delegation by role type:**
+    - codebase-investigator: "How is X currently implemented?", "Where does Y live?", "What patterns exist for Z?"
+    - internet-researcher: "What does the spec say about X?", "How do competitors solve Y?", "What's the current best practice for Z?", "What are known pitfalls of approach W?"
+    - analyst: "Given codebase state X and spec capability Y, what are the viable approaches and trade-offs?"
 - Task graph requirement:
   - Represent research/exploration work as explicit tasks with dependencies.
   - Use `blockedBy` when a task cannot start until another task completes.
