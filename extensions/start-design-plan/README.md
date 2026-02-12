@@ -41,7 +41,7 @@ Default role packs:
 Parameters:
 - `phase`: `context` | `brainstorm`
 - `topic`: string
-- `goals?`: string[] (custom goals, converted into analyst tasks)
+- `goals?`: string[] (custom goals mapped onto the phase role pack; preserves investigator/analyst/researcher specialization)
 - `roles?`: explicit role assignments (`label`, `role`, `goal`, `mode`, `deliverable?`)
 - `includeInternet?`: boolean (optional override of `/design-plan-config`)
 - `maxAgents?`: number (1-4, optional override of `/design-plan-config`)

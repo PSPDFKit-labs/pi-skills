@@ -200,18 +200,42 @@ function buildDefaultTasks(options: {
 	return tasks;
 }
 
-function buildGoalTasks(goals: ReadonlyArray<string>): ReadonlyArray<ResearchTask> {
-	return goals.map((goal, index) => {
-		const label = goalLabelFromText(goal, index);
+function applyGoalsToRoleTasks(options: {
+	readonly tasks: ReadonlyArray<ResearchTask>;
+	readonly goals: ReadonlyArray<string>;
+}): ReadonlyArray<ResearchTask> {
+	if (options.goals.length === 0) return options.tasks;
+	if (options.tasks.length === 0) return [];
+
+	const withPrimaryGoals = options.tasks.map((task, index) => {
+		const assignedGoal = options.goals[index];
+		if (!assignedGoal) return task;
 		return {
-			id: `goal-${index + 1}-${label}`,
-			label,
-			role: "analyst",
-			goal,
-			mode: "hybrid",
-			deliverable: "Focused findings and recommendation for assigned goal.",
+			...task,
+			goal: assignedGoal,
 		};
 	});
+
+	if (options.goals.length <= options.tasks.length) {
+		return withPrimaryGoals;
+	}
+
+	const overflowGoals = options.goals.slice(options.tasks.length);
+	const overflowTasks = overflowGoals.map((goal, overflowIndex) => {
+		const template = options.tasks[overflowIndex % options.tasks.length]!;
+		const ordinal = options.tasks.length + overflowIndex + 1;
+		const label = normalizeLabel(`${template.label}-${goalLabelFromText(goal, ordinal)}`, ordinal);
+		return {
+			id: `${template.id}-extra-${overflowIndex + 1}`,
+			label,
+			role: template.role,
+			goal,
+			mode: template.mode,
+			deliverable: template.deliverable,
+		};
+	});
+
+	return [...withPrimaryGoals, ...overflowTasks];
 }
 
 function buildCustomRoleTasks(roles: ReadonlyArray<{
@@ -287,6 +311,40 @@ function buildResearchPrompt(options: {
 	].join("\n");
 }
 
+function buildRoleSystemPrompt(task: ResearchTask): string {
+	const shared = [
+		"Research subagent quality contract:",
+		"- Do not write files or modify the repository.",
+		"- Prefer concrete evidence over speculation.",
+		"- If evidence is missing, explicitly say what you searched and what was not found.",
+		"- Follow the exact heading structure requested by the user prompt.",
+	];
+
+	if (task.role === "investigator") {
+		return [
+			"You are acting as a codebase-investigator.",
+			"Use an investigating-a-codebase style workflow: inspect entry points, search broadly, follow symbol references, then verify assumptions.",
+			"For codebase claims, include exact file paths and symbol names.",
+			...shared,
+		].join("\n");
+	}
+
+	if (task.role === "researcher") {
+		return [
+			"You are acting as an internet-researcher.",
+			"Use a researching-on-the-internet style workflow: prefer official docs/changelogs, then high-quality secondary sources.",
+			"For external claims, cite concrete references (URLs or source identifiers) and mention version/date when relevant.",
+			...shared,
+		].join("\n");
+	}
+
+	return [
+		"You are acting as an analyst synthesizing technical evidence into actionable design guidance.",
+		"Cross-check evidence, call out contradictions, and separate facts from assumptions.",
+		...shared,
+	].join("\n");
+}
+
 function extractAssistantText(message: unknown): string {
 	if (!message || typeof message !== "object") return "";
 	const role = (message as { readonly role?: unknown }).role;
@@ -345,13 +403,38 @@ function buildProgressText(details: ResearchDetails): string {
 	return lines.join("\n");
 }
 
+function extractSectionBullets(summary: string, heading: string): ReadonlyArray<string> {
+	const lines = summary.split("\n");
+	const headingPattern = new RegExp(`^##\\s+${heading}\\s*$`, "i");
+	const headingIndex = lines.findIndex((line) => headingPattern.test(line.trim()));
+	if (headingIndex < 0) return [];
+
+	const bullets: Array<string> = [];
+	for (let index = headingIndex + 1; index < lines.length; index += 1) {
+		const trimmed = lines[index]?.trim() ?? "";
+		if (/^##\s+/.test(trimmed)) break;
+		if (!/^[-*]\s+/.test(trimmed)) continue;
+		const bullet = trimmed.replace(/^[-*]\s*/, "").trim();
+		if (bullet.length > 0) {
+			bullets.push(bullet);
+		}
+	}
+
+	return bullets;
+}
+
 function extractSignalKeywords(summary: string): ReadonlyArray<string> {
-	const lines = summary
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line.startsWith("-") || line.startsWith("*"));
-	if (lines.length === 0) return [];
-	return lines.slice(0, 2).map((line) => line.replace(/^[-*]\s*/, "").trim()).filter((line) => line.length > 0);
+	const findings = extractSectionBullets(summary, "Findings");
+	if (findings.length > 0) {
+		return findings.slice(0, 2);
+	}
+
+	const recommendation = extractSectionBullets(summary, "Recommendation");
+	if (recommendation.length > 0) {
+		return recommendation.slice(0, 2);
+	}
+
+	return [];
 }
 
 function buildSynthesis(details: ResearchDetails): string {
@@ -413,7 +496,16 @@ async function runResearchTask(options: {
 	const startedAt = new Date().toISOString();
 
 	return await new Promise<ResearchTaskResult>((resolve) => {
-		const args = ["--mode", "json", "-p", "--no-session"];
+		const args = [
+			"--mode",
+			"json",
+			"-p",
+			"--no-session",
+			"--tools",
+			"read,bash,grep,find,ls",
+			"--append-system-prompt",
+			buildRoleSystemPrompt(options.task),
+		];
 		if (options.model) {
 			args.push("--model", options.model);
 		}
@@ -620,9 +712,10 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI, binding: Rese
 			const tasks =
 				customRoles.length > 0
 					? buildCustomRoleTasks(customRoles)
-					: goalList.length > 0
-						? buildGoalTasks(goalList)
-						: buildDefaultTasks({ phase, includeInternet });
+					: applyGoalsToRoleTasks({
+							tasks: buildDefaultTasks({ phase, includeInternet }),
+							goals: goalList,
+						});
 
 			if (tasks.length === 0) {
 				return {
