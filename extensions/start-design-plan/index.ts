@@ -3,6 +3,7 @@ import { buildKickoffPrompt, buildResumePrompt } from "./core/prompt";
 import { TRACKER_ENTRY_TYPE, createInitialTrackerState } from "./core/state";
 import type { DesignTrackerState } from "./core/types";
 import { registerAskUserQuestionTool } from "./tools/ask-user-question";
+import { registerDesignResearchFanoutTool } from "./tools/design-research-fanout";
 import { reconstructTrackerState, registerDesignPlanTrackerTool } from "./tools/design-plan-tracker";
 import { renderDesignPlanWidget } from "./ui/widget";
 
@@ -44,6 +45,7 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 	});
 
 	registerAskUserQuestionTool(pi);
+	registerDesignResearchFanoutTool(pi);
 	registerDesignPlanTrackerTool(pi, {
 		getState: () => state,
 		setState,

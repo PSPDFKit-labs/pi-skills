@@ -19,6 +19,10 @@ You are running an orchestrated design workflow. Follow this five-phase sequence
   - `action=set_design_path` when the design document path is known
 - Use `ask_user_question` for discrete option decisions.
 - Ask only one meaningful question at a time when gathering open-ended context.
+- Research-first requirement (from ed3d flow):
+  - Before Phase 2 clarification questions, run `design_research_fanout` with `phase=context`.
+  - During Phase 4 brainstorming, run `design_research_fanout` with `phase=brainstorm` before selecting approaches.
+  - Use findings to reduce low-value questions and ground trade-off discussion.
 
 ## Phase 1: Context Gathering
 
@@ -35,7 +39,12 @@ Mark Phase 1 in progress, gather context, then mark it completed.
 
 ## Phase 2: Clarification
 
-Disambiguate:
+Before asking clarification questions:
+
+1. Run `design_research_fanout` with `phase=context` for codebase-first investigation.
+2. Review findings and resolve obvious ambiguities without asking the user yet.
+
+Then disambiguate:
 
 - contradictions (resolve trade-offs first)
 - technical terms
@@ -81,7 +90,16 @@ Then set Phase 3 complete and call `design_plan_tracker action=set_design_path`.
 
 ## Phase 4: Brainstorming
 
-- Propose 2-3 architectural approaches
+Research-gated brainstorming:
+
+1. Understanding checkpoint:
+   - Run `design_research_fanout` with `phase=brainstorm` (or custom goals) to investigate current state and constraints.
+2. Exploration checkpoint:
+   - If needed, run a second `design_research_fanout` call with custom goals focused on alternatives and trade-offs.
+
+Then:
+
+- Propose 2-3 architectural approaches grounded in findings
 - Compare trade-offs
 - Prefer existing codebase patterns when sensible
 - Have the user choose

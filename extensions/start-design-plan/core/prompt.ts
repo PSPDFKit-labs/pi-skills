@@ -15,6 +15,7 @@ Follow this five-phase process exactly:
 
 Use ask_user_question when presenting discrete options.
 Use design_plan_tracker to create and update phase progress.
+Use design_research_fanout before clarification and during brainstorming research checkpoints.
 
 Do not skip phases.
 Create docs/design-plans/YYYY-MM-DD-<slug>.md immediately after Definition of Done is confirmed.
@@ -56,6 +57,7 @@ export async function buildKickoffPrompt(options: {
 		"Execution requirements:",
 		"- The tracker is already initialized by /start-design-plan. Call design_plan_tracker action=get first.",
 		"- Update phase status and notes through every phase.",
+		"- Run design_research_fanout before clarification questions and before proposing brainstorm approaches.",
 		"- Use ask_user_question for structured choices.",
 		"- Do not skip phases.",
 		"- Create the design file in docs/design-plans once Definition of Done is confirmed.",
@@ -89,6 +91,7 @@ export async function buildResumePrompt(options: {
 		"- Do not reset or recreate tracker state.",
 		"- Call design_plan_tracker action=get first, then continue from the current phase.",
 		"- Keep phase status transitions and notes current.",
+		"- Run design_research_fanout at the same checkpoints as a fresh run (before clarification and brainstorming exploration).",
 		"- Use ask_user_question for discrete decisions.",
 		"- Continue until design-plan workflow reaches completion (after design documentation).",
 		"",

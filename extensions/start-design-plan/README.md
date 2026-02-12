@@ -11,6 +11,7 @@ License for this extension is in `LICENSE` (CC BY-SA 4.0).
 
 - `/start-design-plan` command
 - `ask_user_question` tool for structured choices
+- `design_research_fanout` tool for parallel, phase-gated research runs
 - `design_plan_tracker` tool for five-phase status tracking
 - Progress widget + status line
 - Workflow contract in `assets/workflow.md`
@@ -26,6 +27,17 @@ Parameters:
 - `options`: array of `{ label, description? }`
 - `allowOther?`: boolean (defaults to `true`)
 - `otherLabel?`: string
+
+### `design_research_fanout`
+
+Parallel research orchestration tool used before clarification and during brainstorming.
+
+Parameters:
+- `phase`: `context` | `brainstorm`
+- `topic`: string
+- `goals?`: string[] (custom research goals)
+- `includeInternet?`: boolean (defaults to `true`)
+- `maxAgents?`: number (1-4, defaults to `3`)
 
 ### `design_plan_tracker`
 
