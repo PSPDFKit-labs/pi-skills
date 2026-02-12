@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { StringEnum } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { complete, StringEnum, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import type { DesignPlanConfig } from "../core/config";
@@ -403,79 +403,73 @@ function buildProgressText(details: ResearchDetails): string {
 	return lines.join("\n");
 }
 
-function extractSectionBullets(summary: string, heading: string): ReadonlyArray<string> {
-	const lines = summary.split("\n");
-	const headingPattern = new RegExp(`^##\\s+${heading}\\s*$`, "i");
-	const headingIndex = lines.findIndex((line) => headingPattern.test(line.trim()));
-	if (headingIndex < 0) return [];
-
-	const bullets: Array<string> = [];
-	for (let index = headingIndex + 1; index < lines.length; index += 1) {
-		const trimmed = lines[index]?.trim() ?? "";
-		if (/^##\s+/.test(trimmed)) break;
-		if (!/^[-*]\s+/.test(trimmed)) continue;
-		const bullet = trimmed.replace(/^[-*]\s*/, "").trim();
-		if (bullet.length > 0) {
-			bullets.push(bullet);
-		}
-	}
-
-	return bullets;
-}
-
-function extractSignalKeywords(summary: string): ReadonlyArray<string> {
-	const findings = extractSectionBullets(summary, "Findings");
-	if (findings.length > 0) {
-		return findings.slice(0, 2);
-	}
-
-	const recommendation = extractSectionBullets(summary, "Recommendation");
-	if (recommendation.length > 0) {
-		return recommendation.slice(0, 2);
-	}
-
-	return [];
-}
-
-function buildSynthesis(details: ResearchDetails): string {
-	const completed = details.results.filter((result) => result.status === "done");
-	const failed = details.results.filter((result) => result.status === "error");
-
-	const digestLines = completed.map((result) => {
-		const signals = extractSignalKeywords(result.summary);
-		if (signals.length === 0) {
-			return `- ${result.label} (${result.role}): ${firstSummaryLine(result.summary)}`;
-		}
-		return `- ${result.label} (${result.role}): ${signals.join(" | ")}`;
-	});
-
-	const riskLines = failed.map((result) => `- ${result.label}: ${result.error ?? "failed"}`);
-
-	const nextStepHints = completed
-		.map((result) => {
-			const lines = result.summary
-				.split("\n")
-				.map((line) => line.trim())
-				.filter((line) => line.length > 0);
-			const handoffIndex = lines.findIndex((line) => /^##\s+handoff/i.test(line));
-			if (handoffIndex < 0) return null;
-			const handoffBullet = lines
-				.slice(handoffIndex + 1)
-				.find((line) => line.startsWith("-") || line.startsWith("*"));
-			if (!handoffBullet) return null;
-			return `- ${result.label}: ${handoffBullet.replace(/^[-*]\s*/, "").trim()}`;
+function buildSynthesisPrompt(details: ResearchDetails): string {
+	const serializedResults = details.results
+		.map((result, index) => {
+			const body =
+				result.status === "error"
+					? `Error: ${result.error ?? "failed"}`
+					: result.summary || "No summary returned";
+			return [
+				`### Result ${index + 1}: ${result.label} (${result.role}) [${result.status}]`,
+				`- goal: ${result.goal}`,
+				`- mode: ${result.mode}`,
+				`- model: ${result.model ?? "default"}`,
+				"",
+				body,
+			].join("\n");
 		})
-		.filter((line): line is string => Boolean(line));
+		.join("\n\n");
 
 	return [
+		"Synthesize these research-agent outputs into a decision-ready digest for design planning.",
+		"Use only the evidence provided. Do not invent facts.",
+		"",
+		`Phase: ${details.phase}`,
+		`Topic: ${details.topic}`,
+		"",
+		"Return exactly these markdown sections:",
 		"## Cross-Agent Synthesis",
-		digestLines.length > 0 ? digestLines.join("\n") : "- no completed role outputs",
+		"- 3-6 bullets combining evidence across roles (not per-role repetition)",
+		"- include concrete evidence references where available (file paths/symbols/URLs)",
 		"",
-		"## Outstanding Gaps",
-		riskLines.length > 0 ? riskLines.join("\n") : "- none reported",
+		"## Top Risks",
+		"- exactly 3 bullets with why each risk matters now",
 		"",
-		"## Suggested Next Checks",
-		nextStepHints.length > 0 ? nextStepHints.join("\n") : "- proceed with clarification/brainstorming using the synthesized findings",
+		"## Recommended Direction",
+		"- Primary recommendation",
+		"- Why this is best now",
+		"- Confidence: high|medium|low",
+		"- Trade-offs (2-4 bullets)",
+		"",
+		"## What to Measure Next",
+		"- 4-8 concrete checks/metrics/instrumentation steps",
+		"",
+		"If evidence is insufficient, say so explicitly in the relevant section.",
+		"",
+		"Research outputs:",
+		serializedResults,
+	].join("\n");
+}
+
+function buildSynthesisFallback(error: string): string {
+	return [
+		"## Cross-Agent Synthesis",
+		`- synthesis unavailable: ${error}`,
+		"",
+		"## Top Risks",
+		"- synthesis unavailable",
+		"- review per-agent outputs below",
+		"- rerun fanout if needed",
+		"",
+		"## Recommended Direction",
+		"- Use the per-agent findings below as the source of truth.",
+		"- Confidence: low",
+		"",
+		"## What to Measure Next",
+		"- confirm model + role outputs completed",
+		"- verify evidence paths and references",
+		"- rerun synthesis if required",
 	].join("\n");
 }
 
@@ -638,6 +632,104 @@ async function runResearchTask(options: {
 	});
 }
 
+const SYNTHESIS_REQUIRED_HEADINGS = [
+	"## Cross-Agent Synthesis",
+	"## Top Risks",
+	"## Recommended Direction",
+	"## What to Measure Next",
+] as const;
+
+async function resolveSynthesisModel(options: {
+	readonly ctx: ExtensionContext;
+	readonly selectedModel: string | null;
+}): Promise<{ readonly model: Model<Api>; readonly apiKey: string } | null> {
+	const available = options.ctx.modelRegistry.getAvailable();
+	const preferredProvider = options.ctx.model?.provider ?? null;
+
+	const candidates: Array<Model<Api>> = [];
+	if (options.selectedModel) {
+		const byId = available.filter((model) => model.id === options.selectedModel);
+		const ordered = [...byId].sort((left, right) => {
+			const leftPreferred = preferredProvider !== null && left.provider === preferredProvider ? 1 : 0;
+			const rightPreferred = preferredProvider !== null && right.provider === preferredProvider ? 1 : 0;
+			return rightPreferred - leftPreferred;
+		});
+		candidates.push(...ordered);
+	}
+
+	if (options.ctx.model) {
+		candidates.push(options.ctx.model);
+	}
+
+	for (const model of available) {
+		if (candidates.some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) {
+			continue;
+		}
+		candidates.push(model);
+	}
+
+	for (const candidate of candidates) {
+		const apiKey = await options.ctx.modelRegistry.getApiKey(candidate);
+		if (!apiKey) continue;
+		return { model: candidate, apiKey };
+	}
+
+	return null;
+}
+
+function isValidSynthesisShape(text: string): boolean {
+	return SYNTHESIS_REQUIRED_HEADINGS.every((heading) => text.includes(heading));
+}
+
+async function runSynthesisWithLlm(options: {
+	readonly ctx: ExtensionContext;
+	readonly details: ResearchDetails;
+	readonly selectedModel: string | null;
+}): Promise<string> {
+	const selection = await resolveSynthesisModel({
+		ctx: options.ctx,
+		selectedModel: options.selectedModel,
+	});
+	if (!selection) {
+		return buildSynthesisFallback("no model/api key available for synthesis");
+	}
+
+	const userMessage: UserMessage = {
+		role: "user",
+		content: [{ type: "text", text: buildSynthesisPrompt(options.details) }],
+		timestamp: Date.now(),
+	};
+
+	try {
+		const response = await complete(
+			selection.model,
+			{ messages: [userMessage] },
+			{ apiKey: selection.apiKey },
+		);
+
+		if (response.stopReason === "aborted" || response.stopReason === "error") {
+			return buildSynthesisFallback(`synthesis model stopped: ${response.stopReason}`);
+		}
+
+		const synthesis = response.content
+			.filter((item): item is { readonly type: "text"; readonly text: string } => item.type === "text")
+			.map((item) => item.text)
+			.join("\n")
+			.trim();
+
+		if (!synthesis) {
+			return buildSynthesisFallback("no synthesis output returned");
+		}
+		if (!isValidSynthesisShape(synthesis)) {
+			return buildSynthesisFallback("synthesis output missing required headings");
+		}
+		return synthesis;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return buildSynthesisFallback(message);
+	}
+}
+
 async function runWithConcurrency<TInput, TResult>(options: {
 	readonly items: ReadonlyArray<TInput>;
 	readonly concurrency: number;
@@ -661,11 +753,13 @@ async function runWithConcurrency<TInput, TResult>(options: {
 	return results;
 }
 
-function renderFinalSummary(details: ResearchDetails): string {
-	const header = `Research fanout complete (${details.completed}/${details.launched})`;
-	const modelLine = details.model ? `Model: ${details.model}` : null;
-	const synthesis = buildSynthesis(details);
-	const sections = details.results.map((result) => {
+function renderFinalSummary(options: {
+	readonly details: ResearchDetails;
+	readonly synthesis: string;
+}): string {
+	const header = `Research fanout complete (${options.details.completed}/${options.details.launched})`;
+	const modelLine = options.details.model ? `Model: ${options.details.model}` : null;
+	const sections = options.details.results.map((result) => {
 		const title = `### ${result.label} (${result.role}) [${result.status}]`;
 		const metadata = [
 			`- goal: ${result.goal}`,
@@ -679,7 +773,9 @@ function renderFinalSummary(details: ResearchDetails): string {
 		}
 		return `${title}\n${metadata}\n\n${result.summary || "No summary returned"}`;
 	});
-	return [header, modelLine, synthesis, ...sections].filter((part): part is string => Boolean(part)).join("\n\n");
+	return [header, modelLine, options.synthesis, ...sections]
+		.filter((part): part is string => Boolean(part))
+		.join("\n\n");
 }
 
 export function registerDesignResearchFanoutTool(pi: ExtensionAPI, binding: ResearchFanoutBinding): void {
@@ -795,7 +891,12 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI, binding: Rese
 				results,
 			};
 
-			const summary = renderFinalSummary(details);
+			const synthesis = await runSynthesisWithLlm({
+				ctx,
+				details,
+				selectedModel,
+			});
+			const summary = renderFinalSummary({ details, synthesis });
 			return {
 				content: [{ type: "text", text: summary }],
 				details,
