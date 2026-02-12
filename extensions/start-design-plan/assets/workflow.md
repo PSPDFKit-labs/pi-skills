@@ -30,6 +30,12 @@ You are running an orchestrated design workflow. Follow this five-phase sequence
   - Respect `/design-plan-config` defaults for research fanout (`model`, `max-agents`, `include-internet`) unless this run needs explicit overrides.
   - Read outputs by role label (`*-investigator`, `*-analyst`, `*-researcher`) and preserve important findings in tracker notes.
   - Use findings to reduce low-value questions and ground trade-off discussion.
+- Research goal composition — goals MUST cover three perspectives:
+  1. **Internal (codebase):** Map current implementation, identify code paths, find existing patterns.
+  2. **Domain (specification/theory):** Research the underlying spec, protocol, or standard that governs the problem. Ask "how does X work at the spec level?" and "what data structures / fields / mechanisms does the spec provide that we might not be using?"
+  3. **External (competitors/best practices):** Research how other implementations solve the same problem. Ask "what do competitors do?", "what are known best practices?", "what are common pitfalls?"
+  - If you write only internal goals, you will miss optimizations visible only through spec knowledge or competitor analysis.
+  - The internet-researcher role exists specifically for goals 2 and 3 — give it domain-level and external research work, not instrumentation tasks.
 - Task graph requirement:
   - Represent research/exploration work as explicit tasks with dependencies.
   - Use `blockedBy` when a task cannot start until another task completes.
@@ -55,10 +61,14 @@ Before asking clarification questions:
 1. Create research tasks for Phase 2 using `design_plan_tracker action=add_task`.
    - Example tasks: `context-codebase`, `context-constraints`, `context-internet`.
 2. Set the first research task to `in_progress`.
-3. Run `design_research_fanout` with `phase=context` for codebase-first investigation.
-4. Mark completed tasks with `action=set_task_status` and append notable findings with `action=append_task_note`.
-5. If one task depends on another, keep it `blocked` until dependencies complete.
-6. Review findings and resolve obvious ambiguities without asking the user yet.
+3. Write research goals covering all three perspectives (internal, domain, external):
+   - Internal: Map the current implementation and identify bottlenecks.
+   - Domain: Research the relevant spec/protocol/standard — what mechanisms or data exist that could be exploited?
+   - External: Research how competitors or other implementations solve the same problem. What best practices exist? What are known pitfalls?
+4. Run `design_research_fanout` with `phase=context` and these goals.
+5. Mark completed tasks with `action=set_task_status` and append notable findings with `action=append_task_note`.
+6. If one task depends on another, keep it `blocked` until dependencies complete.
+7. Review findings and resolve obvious ambiguities without asking the user yet.
 
 Then disambiguate:
 
@@ -112,7 +122,11 @@ Research-gated brainstorming:
    - Example: `brainstorm-critical-path` -> `brainstorm-alternatives` -> `brainstorm-selection`.
 2. Understanding checkpoint:
    - Set `brainstorm-critical-path` to `in_progress`.
-   - Run `design_research_fanout` with `phase=brainstorm` (or custom goals) to investigate current state and constraints.
+   - Write brainstorm goals that go deeper than context phase — ask targeted questions informed by what context research found. Include:
+     - Deep-dive codebase investigation of specific bottlenecks identified in context phase
+     - Domain/spec research on mechanisms that could address identified bottlenecks
+     - External research on how others solved the specific problem pattern
+   - Run `design_research_fanout` with `phase=brainstorm` and these goals.
    - Mark task complete and append notes.
 3. Exploration checkpoint:
    - Unblock dependent tasks, set next task `in_progress`.
