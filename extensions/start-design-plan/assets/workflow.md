@@ -80,12 +80,13 @@ Before asking clarification questions:
 6. If one task depends on another, keep it `blocked` until dependencies complete.
 7. Review findings and resolve obvious ambiguities without asking the user yet.
 
-Then disambiguate:
+Then disambiguate — in this order:
 
-- contradictions (resolve trade-offs first)
-- technical terms
-- scope boundaries
-- assumptions behind constraints
+1. **Contradictions first.** Scan for mutually exclusive goals or unacknowledged trade-offs. If the user stated conflicting requirements, resolve those before anything else — technical clarification is wasted effort if the foundation shifts.
+   - Don't accuse — illuminate: "I notice X and Y can pull in different directions. Which takes priority?"
+2. **Technical terms.** Disambiguate anything that could mean multiple things (e.g., "caching" → application-level? HTTP? DB query?).
+3. **Scope boundaries.** Identify what's included and excluded.
+4. **Assumptions behind constraints.** When user says "must use X", understand why — is it regulatory, team preference, or misconception?
 
 Use `ask_user_question` for explicit choices.
 
@@ -126,33 +127,42 @@ Then set Phase 3 complete and call `design_plan_tracker action=set_design_path`.
 
 ## Phase 4: Brainstorming
 
-Research-gated brainstorming:
+Research-gated brainstorming with iterative refinement:
 
 1. Create brainstorming tasks with dependencies (`action=add_task`, `blockedBy`).
-   - Example: `brainstorm-critical-path` -> `brainstorm-alternatives` -> `brainstorm-selection`.
-2. Understanding checkpoint:
-   - Set `brainstorm-critical-path` to `in_progress`.
+   - Example: `brainstorm-round1` -> `brainstorm-round2` -> `brainstorm-selection`.
+
+2. **Round 1 — Understanding checkpoint:**
+   - Set `brainstorm-round1` to `in_progress`.
    - Write brainstorm goals that go deeper than context phase — ask targeted questions informed by what context research found. Include:
      - Deep-dive codebase investigation of specific bottlenecks identified in context phase
      - Domain/spec research on mechanisms that could address identified bottlenecks
      - External research on how others solved the specific problem pattern
    - Run `design_research_fanout` with `phase=brainstorm` and these goals.
    - Mark task complete and append notes.
-3. Exploration checkpoint:
-   - Unblock dependent tasks, set next task `in_progress`.
-   - If needed, run a second `design_research_fanout` call with custom goals focused on alternatives and trade-offs.
+
+3. **Round 2 — Targeted follow-up (required when round 1 has gaps):**
+   - Review round 1 results. Identify:
+     - Unanswered questions or "not found" results from round 1
+     - New questions raised by round 1 findings (e.g., round 1 found a spec mechanism — now investigate how the codebase could use it)
+     - Specific claims that need verification from a different perspective (e.g., codebase investigator found a pattern — does it match spec best practice?)
+   - If any of these exist, set `brainstorm-round2` to `in_progress` and run a second `design_research_fanout` with targeted goals addressing the gaps.
+   - If round 1 fully answered all three perspectives with no gaps, skip round 2. But be honest — single-round research rarely covers everything.
+   - Mark task complete and append notes.
+
 4. Before approach selection, call `design_plan_tracker action=list_tasks` and ensure no required brainstorming task is blocked/pending.
 
 Then:
 
 - Present a **Research Digest** before asking for a decision:
-  - 3-6 bullets covering what was researched, key findings, and unresolved risks
-  - include concrete file paths/symbols when available
+  - 3-6 bullets combining findings across both rounds
+  - Include concrete file paths/symbols/URLs when available
+  - Note what was searched but not found
 - Propose 2-3 architectural approaches grounded in that digest
 - Compare trade-offs
 - Prefer existing codebase patterns when sensible
 - Have the user choose (use `ask_user_question`)
-- Validate in small sections
+- Validate the selected approach in small sections (200-300 words each), asking for feedback after each
 
 No implementation code. Contracts/interfaces are fine.
 
@@ -197,6 +207,47 @@ When Phase 5 is completed:
 - Stop.
 - Do not hand off into implementation planning.
 - Do not suggest `/clear`, copy commands, or implementation-plan commands.
+
+## Question quality
+
+When asking questions with `ask_user_question`:
+
+- **Do not present trap options.** If only one answer is useful, coherent, and effective, state your assumption and move on. Do not manufacture fake alternatives to create the appearance of a choice.
+- **Every option must be genuinely viable.** If you can't explain why someone would reasonably pick an option, remove it.
+- **Use open-ended questions for validation** ("Does this look right?"), structured questions for decisions ("Which approach?").
+- **Do not ask questions just to ask them.** If you have no useful questions, stop asking and proceed.
+- **One question at a time** when gathering open-ended context.
+
+## When to revisit earlier phases
+
+You can and should go backward when:
+- Phase 2 reveals fundamental gaps → return to Phase 1
+- Phase 3 reveals unclear deliverables → return to Phase 2
+- Phase 4 uncovers new constraints → return to Phase 1, 2, or 3
+- User questions the selected approach → return to Phase 4
+- Research reveals a constraint you didn't know about → reassess the affected phase
+
+Don't force forward linearly when going backward would give better results.
+
+## Common rationalizations — STOP
+
+These are violations of the workflow requirements:
+
+| Excuse | Reality |
+|--------|---------|
+| "Requirements are clear, skip research" | Research reveals what you don't know you don't know. Always run fanout. |
+| "I can research this quickly myself" | You'll consume context and may hallucinate. Delegate to research agents. |
+| "Only need codebase goals, no domain/external" | You'll miss optimizations visible only through spec knowledge or competitor analysis. |
+| "One research round is enough" | Review round 1 for gaps. If questions remain, run round 2. |
+| "Obvious solution, skip brainstorming" | Codebase may have an established pattern. Spec may have a mechanism you're unaware of. Check first. |
+| "Idea is simple, skip exploring alternatives" | Always propose 2-3 approaches. Comparison reveals issues. |
+| "I'll present the whole design at once" | Validate in small sections. Incremental validation catches problems early. |
+| "I know this codebase, don't need investigator" | You don't know the current state. Always verify. |
+| "Don't need internet research for this" | External knowledge and current docs matter. Research when relevant. |
+| "I'll show implementation code so the user understands" | Show contracts/interfaces, not implementation. |
+| "Only one answer makes sense but I'll present options anyway" | State your assumption and move on. Don't present trap options. |
+
+**All of these mean: STOP. Follow the requirements exactly.**
 
 ## Quality bar
 
