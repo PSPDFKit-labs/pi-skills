@@ -21,7 +21,8 @@ You are running an orchestrated design workflow. Follow this five-phase sequence
   - `action=set_task_status` to mark task progression (`pending`/`in_progress`/`completed`/`blocked`/`failed`)
   - `action=append_task_note` to preserve findings and rationale
   - `action=list_tasks` when deciding what remains blocked
-- Use `ask_user_question` for discrete option decisions.
+- Use `ask_user_question` for every discrete option decision with 2+ choices.
+- Do not present numbered/bulleted option menus directly in assistant text when `ask_user_question` should be used.
 - Ask only one meaningful question at a time when gathering open-ended context.
 - Research-first requirement (from ed3d flow):
   - Before Phase 2 clarification questions, run `design_research_fanout` with `phase=context`.
@@ -162,8 +163,9 @@ Mark Phase 5 complete when the design document is done.
 
 When Phase 5 is completed:
 
-- Announce that design planning is complete.
-- Report the final design path (`docs/design-plans/YYYY-MM-DD-<slug>.md`).
+- Respond with exactly two lines and no extra text:
+  - `Design planning is complete.`
+  - `Design path: docs/design-plans/YYYY-MM-DD-<slug>.md`
 - Stop.
 - Do not hand off into implementation planning.
 - Do not suggest `/clear`, copy commands, or implementation-plan commands.

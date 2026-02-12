@@ -14,6 +14,7 @@ License for this extension is in `LICENSE` (CC BY-SA 4.0).
 - `design_research_fanout` tool for parallel, phase-gated research runs
 - `design_plan_tracker` tool for five-phase status tracking
 - Progress widget + status line
+- Strict guardrail mode for discrete decisions and completion response shape
 - Workflow contract in `assets/workflow.md`
 
 ## Tools
@@ -73,3 +74,12 @@ If no topic is supplied, the command prompts for one.
 Resumes an in-progress design workflow from the stored tracker state.
 
 Optional guidance is passed through as additional instruction for the resumed run.
+
+### `/design-plan-guardrails [strict|relaxed|status]`
+
+Controls guardrail behavior:
+- `strict` (default):
+  - enforces `ask_user_question` for discrete 2+ option decisions
+  - enforces final completion response shape (`Design planning is complete.` + `Design path: ...`)
+- `relaxed`: prompt guidance only
+- `status`: show current mode
