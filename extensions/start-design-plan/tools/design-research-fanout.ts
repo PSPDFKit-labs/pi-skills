@@ -95,6 +95,28 @@ function normalizeLabel(label: string, fallbackIndex: number): string {
 	return normalized.length > 0 ? normalized : `role-${fallbackIndex + 1}`;
 }
 
+function truncateText(text: string, maxLength: number): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	if (normalized.length <= maxLength) return normalized;
+	return `${normalized.slice(0, Math.max(1, maxLength - 1))}…`;
+}
+
+function goalPreview(goal: string, maxLength = 72): string {
+	return truncateText(goal, maxLength);
+}
+
+function goalLabelFromText(goal: string, fallbackIndex: number): string {
+	const tokens = goal
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]+/g, " ")
+		.split(/\s+/)
+		.filter((token) => token.length > 0)
+		.slice(0, 4);
+	const core = tokens.join("-").replace(/-{2,}/g, "-").replace(/^-|-$/g, "");
+	if (!core) return `research-${fallbackIndex + 1}`;
+	return `research-${fallbackIndex + 1}-${core.slice(0, 28)}`;
+}
+
 function buildDefaultTasks(options: {
 	readonly phase: ResearchPhase;
 	readonly includeInternet: boolean;
@@ -167,14 +189,17 @@ function buildDefaultTasks(options: {
 }
 
 function buildGoalTasks(goals: ReadonlyArray<string>): ReadonlyArray<ResearchTask> {
-	return goals.map((goal, index) => ({
-		id: `goal-${index + 1}`,
-		label: `research-${index + 1}`,
-		role: "analyst",
-		goal,
-		mode: "hybrid",
-		deliverable: "Focused findings and recommendation for assigned goal.",
-	}));
+	return goals.map((goal, index) => {
+		const label = goalLabelFromText(goal, index);
+		return {
+			id: `goal-${index + 1}-${label}`,
+			label,
+			role: "analyst",
+			goal,
+			mode: "hybrid",
+			deliverable: "Focused findings and recommendation for assigned goal.",
+		};
+	});
 }
 
 function buildCustomRoleTasks(roles: ReadonlyArray<{
@@ -295,13 +320,14 @@ function buildProgressText(details: ResearchDetails): string {
 	];
 	for (const result of details.results) {
 		const statusIcon = result.status === "done" ? "✓" : result.status === "error" ? "✗" : "⏳";
+		const goal = ` — goal: ${goalPreview(result.goal, 64)}`;
 		const suffix =
 			result.status === "error"
 				? ` — ${result.error ?? "failed"}`
 				: result.status === "done"
 					? ` — ${firstSummaryLine(result.summary)}`
 					: "";
-		lines.push(`${statusIcon} ${result.label} (${result.role})${suffix}`);
+		lines.push(`${statusIcon} ${result.label} (${result.role})${goal}${suffix}`);
 	}
 	return lines.join("\n");
 }
@@ -659,11 +685,34 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 			const roleCount = Array.isArray(args.roles) ? args.roles.length : 0;
 			const goals = Array.isArray(args.goals) ? args.goals.length : 0;
 			const mode = roleCount > 0 ? `${roleCount} explicit roles` : goals > 0 ? `${goals} custom goals` : "default roles";
-			const text =
+			const header =
 				theme.fg("toolTitle", theme.bold("design_research_fanout ")) +
 				theme.fg("accent", `${phase}`) +
 				theme.fg("muted", ` • ${mode}`);
-			return new Text(text, 0, 0);
+
+			const previews: Array<string> = [];
+			if (Array.isArray(args.goals)) {
+				for (const goal of args.goals.slice(0, 3)) {
+					if (typeof goal !== "string") continue;
+					const trimmed = goal.trim();
+					if (!trimmed) continue;
+					previews.push(theme.fg("dim", `- ${goalPreview(trimmed, 76)}`));
+				}
+			}
+			if (previews.length === 0 && Array.isArray(args.roles)) {
+				for (const role of args.roles.slice(0, 3)) {
+					if (!role || typeof role !== "object") continue;
+					const label = typeof role.label === "string" ? role.label.trim() : "role";
+					const goal = typeof role.goal === "string" ? role.goal.trim() : "";
+					if (!goal) continue;
+					previews.push(theme.fg("dim", `- ${label}: ${goalPreview(goal, 68)}`));
+				}
+			}
+
+			if (previews.length === 0) {
+				return new Text(header, 0, 0);
+			}
+			return new Text(`${header}\n${previews.join("\n")}`, 0, 0);
 		},
 		renderResult(result, { expanded }, theme) {
 			const details = result.details as ResearchDetails | undefined;
@@ -683,15 +732,16 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 				theme.fg("dim", ` • phase ${details.phase}`);
 
 			if (!expanded) {
-				const rolePreview = details.results
-					.slice(0, 3)
-					.map((item) => {
-						const icon = item.status === "done" ? "✓" : item.status === "error" ? "✗" : "⏳";
-						return `${icon} ${item.label}`;
-					})
-					.join(" • ");
-				const suffix = details.results.length > 3 ? ` • +${details.results.length - 3} more` : "";
-				return new Text(`${header}\n${theme.fg("muted", rolePreview + suffix)}`, 0, 0);
+				const rolePreviewLines = details.results.slice(0, 3).map((item) => {
+					const icon = item.status === "done" ? "✓" : item.status === "error" ? "✗" : "⏳";
+					return `${icon} ${item.label}: ${goalPreview(item.goal, 52)}`;
+				});
+				const suffix =
+					details.results.length > 3
+						? theme.fg("dim", `+${details.results.length - 3} more research tasks`)
+						: "";
+				const body = rolePreviewLines.length > 0 ? theme.fg("muted", rolePreviewLines.join("\n")) : theme.fg("muted", "(no tasks)");
+				return new Text(suffix ? `${header}\n${body}\n${suffix}` : `${header}\n${body}`, 0, 0);
 			}
 
 			const lines = [header];
@@ -704,7 +754,7 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 							? "running"
 							: firstSummaryLine(item.summary);
 				lines.push(
-					`${icon} ${item.label} (${item.role}) • ${item.mode} • ${formatDuration(item.durationMs)} — ${detailLine}`,
+					`${icon} ${item.label} (${item.role}) • ${item.mode} • ${formatDuration(item.durationMs)} — ${detailLine}\n  goal: ${goalPreview(item.goal, 88)}`,
 				);
 			}
 			return new Text(lines.join("\n"), 0, 0);
