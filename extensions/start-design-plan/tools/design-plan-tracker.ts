@@ -4,14 +4,18 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
 	TRACKER_ENTRY_TYPE,
+	addTask,
 	appendPhaseNote,
+	appendTaskNote,
 	createInitialTrackerState,
 	deriveCurrentPhaseId,
+	listTasks,
+	normalizeTrackerState,
 	setDesignPath,
 	setPhaseStatus,
-	normalizeTrackerState,
+	setTaskStatus,
 } from "../core/state";
-import type { DesignTrackerState, PhaseStatus } from "../core/types";
+import type { AnyDesignTrackerState, DesignTask, DesignTrackerState, PhaseStatus, TaskStatus } from "../core/types";
 
 type TrackerBinding = {
 	readonly getState: () => DesignTrackerState | null;
@@ -23,14 +27,31 @@ type TrackerToolDetails = {
 	readonly state: DesignTrackerState | null;
 	readonly currentPhaseId: string | null;
 	readonly message: string;
+	readonly tasks?: ReadonlyArray<DesignTask>;
 };
 
-const STATUS_SCHEMA = StringEnum(["pending", "in_progress", "completed", "blocked"] as const, {
+const PHASE_STATUS_SCHEMA = StringEnum(["pending", "in_progress", "completed", "blocked"] as const, {
 	description: "Phase status",
 });
 
+const TASK_STATUS_SCHEMA = StringEnum(
+	["pending", "in_progress", "completed", "blocked", "failed"] as const,
+	{ description: "Task status" },
+);
+
 const ACTION_SCHEMA = StringEnum(
-	["create", "get", "set_status", "append_note", "set_design_path", "reset"] as const,
+	[
+		"create",
+		"get",
+		"set_status",
+		"append_note",
+		"set_design_path",
+		"add_task",
+		"set_task_status",
+		"append_task_note",
+		"list_tasks",
+		"reset",
+	] as const,
 	{ description: "Tracker action" },
 );
 
@@ -38,17 +59,27 @@ const TRACKER_PARAMS = Type.Object({
 	action: ACTION_SCHEMA,
 	topic: Type.Optional(Type.String({ description: "Topic for create action" })),
 	phaseId: Type.Optional(Type.String({ description: "Phase id (phase-1 ... phase-5)" })),
-	status: Type.Optional(STATUS_SCHEMA),
-	note: Type.Optional(Type.String({ description: "Note to append to phase" })),
+	status: Type.Optional(PHASE_STATUS_SCHEMA),
+	note: Type.Optional(Type.String({ description: "Note to append to a phase" })),
 	designPath: Type.Optional(Type.String({ description: "Path to the design document" })),
+	taskId: Type.Optional(Type.String({ description: "Task id" })),
+	title: Type.Optional(Type.String({ description: "Task title for add_task" })),
+	blockedBy: Type.Optional(Type.Array(Type.String({ description: "Task ids this task depends on" }))),
+	owner: Type.Optional(Type.String({ description: "Optional owner label for task" })),
+	taskStatus: Type.Optional(TASK_STATUS_SCHEMA),
 	force: Type.Optional(Type.Boolean({ description: "Force create over existing state" })),
 });
 
-function toDetails(state: DesignTrackerState | null, message: string): TrackerToolDetails {
+function toDetails(options: {
+	readonly state: DesignTrackerState | null;
+	readonly message: string;
+	readonly tasks?: ReadonlyArray<DesignTask>;
+}): TrackerToolDetails {
 	return {
-		state,
-		currentPhaseId: state ? deriveCurrentPhaseId(state) : null,
-		message,
+		state: options.state,
+		currentPhaseId: options.state ? deriveCurrentPhaseId(options.state) : null,
+		message: options.message,
+		tasks: options.tasks,
 	};
 }
 
@@ -56,12 +87,12 @@ function persistState(pi: ExtensionAPI, state: DesignTrackerState | null): void 
 	pi.appendEntry(TRACKER_ENTRY_TYPE, { state });
 }
 
-function asTrackerState(value: unknown): DesignTrackerState | null {
+function asTrackerState(value: unknown): AnyDesignTrackerState | null {
 	if (!value || typeof value !== "object") return null;
 	const candidate = value as { readonly version?: unknown; readonly phases?: unknown };
-	if (candidate.version !== 1) return null;
+	if (candidate.version !== 1 && candidate.version !== 2) return null;
 	if (!Array.isArray(candidate.phases)) return null;
-	return value as DesignTrackerState;
+	return value as AnyDesignTrackerState;
 }
 
 export function reconstructTrackerState(ctx: ExtensionContext): DesignTrackerState | null {
@@ -76,12 +107,11 @@ export function reconstructTrackerState(ctx: ExtensionContext): DesignTrackerSta
 			continue;
 		}
 		const parsed = asTrackerState(data.state);
-		if (parsed) {
-			latest = normalizeTrackerState({
-				state: parsed,
-				nowIso: new Date().toISOString(),
-			});
-		}
+		if (!parsed) continue;
+		latest = normalizeTrackerState({
+			state: parsed,
+			nowIso: new Date().toISOString(),
+		});
 	}
 	return latest;
 }
@@ -95,15 +125,19 @@ function requireState(state: DesignTrackerState | null):
 	return { ok: true, state };
 }
 
-export function registerDesignPlanTrackerTool(
-	pi: ExtensionAPI,
-	binding: TrackerBinding,
-): void {
+function taskSummary(tasks: ReadonlyArray<DesignTask>): string {
+	const completed = tasks.filter((task) => task.status === "completed").length;
+	const blocked = tasks.filter((task) => task.status === "blocked").length;
+	const inProgress = tasks.filter((task) => task.status === "in_progress").length;
+	return `${completed}/${tasks.length} complete • ${inProgress} in progress • ${blocked} blocked`;
+}
+
+export function registerDesignPlanTrackerTool(pi: ExtensionAPI, binding: TrackerBinding): void {
 	pi.registerTool({
 		name: "design_plan_tracker",
 		label: "Design Plan Tracker",
 		description:
-			"Track /start-design-plan phase progress. Actions: create, get, set_status, append_note, set_design_path, reset.",
+			"Track /start-design-plan phase and task progress. Actions: create, get, set_status, append_note, set_design_path, add_task, set_task_status, append_task_note, list_tasks, reset.",
 		parameters: TRACKER_PARAMS,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const nowIso = new Date().toISOString();
@@ -115,7 +149,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: "Tracker already exists. Use force=true to recreate." }],
 							isError: true,
-							details: toDetails(current, "Tracker already exists"),
+							details: toDetails({ state: current, message: "Tracker already exists" }),
 						};
 					}
 					const topic = params.topic?.trim() || "Design plan";
@@ -124,7 +158,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: created.error }],
 							isError: true,
-							details: toDetails(current, created.error),
+							details: toDetails({ state: current, message: created.error }),
 						};
 					}
 					binding.setState(created.state);
@@ -132,14 +166,15 @@ export function registerDesignPlanTrackerTool(
 					binding.onChange(ctx);
 					return {
 						content: [{ type: "text", text: `Tracker created for topic: ${created.state.topic}` }],
-						details: toDetails(created.state, "Tracker created"),
+						details: toDetails({ state: created.state, message: "Tracker created" }),
 					};
 				}
 
 				case "get": {
+					const details = toDetails({ state: current, message: "Tracker snapshot", tasks: current?.tasks });
 					return {
-						content: [{ type: "text", text: JSON.stringify(toDetails(current, "Tracker snapshot"), null, 2) }],
-						details: toDetails(current, "Tracker snapshot"),
+						content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+						details,
 					};
 				}
 
@@ -149,7 +184,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: required.error }],
 							isError: true,
-							details: toDetails(current, required.error),
+							details: toDetails({ state: current, message: required.error }),
 						};
 					}
 					const phaseId = params.phaseId?.trim();
@@ -158,7 +193,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: "phaseId and status are required" }],
 							isError: true,
-							details: toDetails(required.state, "Missing phaseId or status"),
+							details: toDetails({ state: required.state, message: "Missing phaseId or status" }),
 						};
 					}
 					const updated = setPhaseStatus({
@@ -171,7 +206,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: updated.error }],
 							isError: true,
-							details: toDetails(required.state, updated.error),
+							details: toDetails({ state: required.state, message: updated.error }),
 						};
 					}
 					binding.setState(updated.state);
@@ -179,7 +214,7 @@ export function registerDesignPlanTrackerTool(
 					binding.onChange(ctx);
 					return {
 						content: [{ type: "text", text: `Updated ${phaseId} to ${status}` }],
-						details: toDetails(updated.state, `Updated ${phaseId} to ${status}`),
+						details: toDetails({ state: updated.state, message: `Updated ${phaseId} to ${status}` }),
 					};
 				}
 
@@ -189,7 +224,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: required.error }],
 							isError: true,
-							details: toDetails(current, required.error),
+							details: toDetails({ state: current, message: required.error }),
 						};
 					}
 					const phaseId = params.phaseId?.trim();
@@ -198,7 +233,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: "phaseId is required" }],
 							isError: true,
-							details: toDetails(required.state, "Missing phaseId"),
+							details: toDetails({ state: required.state, message: "Missing phaseId" }),
 						};
 					}
 					const updated = appendPhaseNote({
@@ -211,7 +246,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: updated.error }],
 							isError: true,
-							details: toDetails(required.state, updated.error),
+							details: toDetails({ state: required.state, message: updated.error }),
 						};
 					}
 					binding.setState(updated.state);
@@ -219,7 +254,7 @@ export function registerDesignPlanTrackerTool(
 					binding.onChange(ctx);
 					return {
 						content: [{ type: "text", text: `Appended note to ${phaseId}` }],
-						details: toDetails(updated.state, `Appended note to ${phaseId}`),
+						details: toDetails({ state: updated.state, message: `Appended note to ${phaseId}` }),
 					};
 				}
 
@@ -229,7 +264,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: required.error }],
 							isError: true,
-							details: toDetails(current, required.error),
+							details: toDetails({ state: current, message: required.error }),
 						};
 					}
 					const designPath = params.designPath ?? "";
@@ -238,7 +273,7 @@ export function registerDesignPlanTrackerTool(
 						return {
 							content: [{ type: "text", text: updated.error }],
 							isError: true,
-							details: toDetails(required.state, updated.error),
+							details: toDetails({ state: required.state, message: updated.error }),
 						};
 					}
 					binding.setState(updated.state);
@@ -246,7 +281,159 @@ export function registerDesignPlanTrackerTool(
 					binding.onChange(ctx);
 					return {
 						content: [{ type: "text", text: `Set design path: ${updated.state.designPath}` }],
-						details: toDetails(updated.state, "Design path updated"),
+						details: toDetails({ state: updated.state, message: "Design path updated" }),
+					};
+				}
+
+				case "add_task": {
+					const required = requireState(current);
+					if (!required.ok) {
+						return {
+							content: [{ type: "text", text: required.error }],
+							isError: true,
+							details: toDetails({ state: current, message: required.error }),
+						};
+					}
+					const phaseId = params.phaseId?.trim();
+					const title = params.title?.trim();
+					if (!phaseId || !title) {
+						return {
+							content: [{ type: "text", text: "phaseId and title are required for add_task" }],
+							isError: true,
+							details: toDetails({ state: required.state, message: "Missing phaseId/title" }),
+						};
+					}
+					const updated = addTask({
+						state: required.state,
+						phaseId,
+						title,
+						blockedBy: params.blockedBy ?? [],
+						owner: params.owner?.trim() || null,
+						taskId: params.taskId?.trim(),
+						nowIso,
+					});
+					if (!updated.ok) {
+						return {
+							content: [{ type: "text", text: updated.error }],
+							isError: true,
+							details: toDetails({ state: required.state, message: updated.error }),
+						};
+					}
+					binding.setState(updated.state);
+					persistState(pi, updated.state);
+					binding.onChange(ctx);
+					return {
+						content: [{ type: "text", text: `Added task in ${phaseId}: ${title}` }],
+						details: toDetails({
+							state: updated.state,
+							message: `Task added (${taskSummary(updated.state.tasks)})`,
+							tasks: updated.state.tasks,
+						}),
+					};
+				}
+
+				case "set_task_status": {
+					const required = requireState(current);
+					if (!required.ok) {
+						return {
+							content: [{ type: "text", text: required.error }],
+							isError: true,
+							details: toDetails({ state: current, message: required.error }),
+						};
+					}
+					const taskId = params.taskId?.trim();
+					const status = params.taskStatus as TaskStatus | undefined;
+					if (!taskId || !status) {
+						return {
+							content: [{ type: "text", text: "taskId and taskStatus are required" }],
+							isError: true,
+							details: toDetails({ state: required.state, message: "Missing taskId/taskStatus" }),
+						};
+					}
+					const updated = setTaskStatus({
+						state: required.state,
+						taskId,
+						status,
+						nowIso,
+					});
+					if (!updated.ok) {
+						return {
+							content: [{ type: "text", text: updated.error }],
+							isError: true,
+							details: toDetails({ state: required.state, message: updated.error }),
+						};
+					}
+					binding.setState(updated.state);
+					persistState(pi, updated.state);
+					binding.onChange(ctx);
+					return {
+						content: [{ type: "text", text: `Updated task ${taskId} to ${status}` }],
+						details: toDetails({
+							state: updated.state,
+							message: `Task updated (${taskSummary(updated.state.tasks)})`,
+							tasks: updated.state.tasks,
+						}),
+					};
+				}
+
+				case "append_task_note": {
+					const required = requireState(current);
+					if (!required.ok) {
+						return {
+							content: [{ type: "text", text: required.error }],
+							isError: true,
+							details: toDetails({ state: current, message: required.error }),
+						};
+					}
+					const taskId = params.taskId?.trim();
+					const note = params.note ?? "";
+					if (!taskId) {
+						return {
+							content: [{ type: "text", text: "taskId is required" }],
+							isError: true,
+							details: toDetails({ state: required.state, message: "Missing taskId" }),
+						};
+					}
+					const updated = appendTaskNote({ state: required.state, taskId, note, nowIso });
+					if (!updated.ok) {
+						return {
+							content: [{ type: "text", text: updated.error }],
+							isError: true,
+							details: toDetails({ state: required.state, message: updated.error }),
+						};
+					}
+					binding.setState(updated.state);
+					persistState(pi, updated.state);
+					binding.onChange(ctx);
+					return {
+						content: [{ type: "text", text: `Appended note to task ${taskId}` }],
+						details: toDetails({ state: updated.state, message: "Task note appended", tasks: updated.state.tasks }),
+					};
+				}
+
+				case "list_tasks": {
+					const required = requireState(current);
+					if (!required.ok) {
+						return {
+							content: [{ type: "text", text: required.error }],
+							isError: true,
+							details: toDetails({ state: current, message: required.error }),
+						};
+					}
+					const phaseId = params.phaseId?.trim();
+					const tasks = listTasks({ state: required.state, phaseId });
+					const payload = {
+						phaseId: phaseId ?? null,
+						total: tasks.length,
+						tasks,
+					};
+					return {
+						content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+						details: toDetails({
+							state: required.state,
+							message: `Task list (${taskSummary(tasks)})`,
+							tasks,
+						}),
 					};
 				}
 
@@ -256,15 +443,19 @@ export function registerDesignPlanTrackerTool(
 					binding.onChange(ctx);
 					return {
 						content: [{ type: "text", text: "Tracker reset" }],
-						details: toDetails(null, "Tracker reset"),
+						details: toDetails({ state: null, message: "Tracker reset" }),
 					};
 				}
 			}
 		},
 		renderCall(args, theme) {
 			const action = args.action ?? "get";
-			const phase = args.phaseId ? ` ${args.phaseId}` : "";
-			return new Text(theme.fg("toolTitle", theme.bold("design_plan_tracker ")) + theme.fg("muted", `${action}${phase}`), 0, 0);
+			const suffix = args.phaseId ? ` ${args.phaseId}` : args.taskId ? ` ${args.taskId}` : "";
+			return new Text(
+				theme.fg("toolTitle", theme.bold("design_plan_tracker ")) + theme.fg("muted", `${action}${suffix}`),
+				0,
+				0,
+			);
 		},
 		renderResult(result, _options, theme) {
 			const details = result.details as TrackerToolDetails | undefined;
@@ -276,7 +467,8 @@ export function registerDesignPlanTrackerTool(
 				return new Text(theme.fg("muted", details.message), 0, 0);
 			}
 			const current = details.currentPhaseId ?? "none";
-			return new Text(theme.fg("success", `✓ ${details.message} (current: ${current})`), 0, 0);
+			const taskInfo = details.tasks ? ` • tasks ${taskSummary(details.tasks)}` : "";
+			return new Text(theme.fg("success", `✓ ${details.message} (current: ${current}${taskInfo})`), 0, 0);
 		},
 	});
 }

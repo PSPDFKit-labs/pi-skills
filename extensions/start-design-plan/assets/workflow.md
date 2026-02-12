@@ -17,12 +17,20 @@ You are running an orchestrated design workflow. Follow this five-phase sequence
   - `action=set_status` as phases move to `in_progress` and `completed`
   - `action=append_note` for important decisions
   - `action=set_design_path` when the design document path is known
+  - `action=add_task` to register research/exploration tasks per phase
+  - `action=set_task_status` to mark task progression (`pending`/`in_progress`/`completed`/`blocked`/`failed`)
+  - `action=append_task_note` to preserve findings and rationale
+  - `action=list_tasks` when deciding what remains blocked
 - Use `ask_user_question` for discrete option decisions.
 - Ask only one meaningful question at a time when gathering open-ended context.
 - Research-first requirement (from ed3d flow):
   - Before Phase 2 clarification questions, run `design_research_fanout` with `phase=context`.
   - During Phase 4 brainstorming, run `design_research_fanout` with `phase=brainstorm` before selecting approaches.
   - Use findings to reduce low-value questions and ground trade-off discussion.
+- Task graph requirement:
+  - Represent research/exploration work as explicit tasks with dependencies.
+  - Use `blockedBy` when a task cannot start until another task completes.
+  - Do not advance a phase while required tasks remain `blocked`, `pending`, or `in_progress`.
 
 ## Phase 1: Context Gathering
 
@@ -41,8 +49,13 @@ Mark Phase 1 in progress, gather context, then mark it completed.
 
 Before asking clarification questions:
 
-1. Run `design_research_fanout` with `phase=context` for codebase-first investigation.
-2. Review findings and resolve obvious ambiguities without asking the user yet.
+1. Create research tasks for Phase 2 using `design_plan_tracker action=add_task`.
+   - Example tasks: `context-codebase`, `context-constraints`, `context-internet`.
+2. Set the first research task to `in_progress`.
+3. Run `design_research_fanout` with `phase=context` for codebase-first investigation.
+4. Mark completed tasks with `action=set_task_status` and append notable findings with `action=append_task_note`.
+5. If one task depends on another, keep it `blocked` until dependencies complete.
+6. Review findings and resolve obvious ambiguities without asking the user yet.
 
 Then disambiguate:
 
@@ -92,10 +105,16 @@ Then set Phase 3 complete and call `design_plan_tracker action=set_design_path`.
 
 Research-gated brainstorming:
 
-1. Understanding checkpoint:
+1. Create brainstorming tasks with dependencies (`action=add_task`, `blockedBy`).
+   - Example: `brainstorm-critical-path` -> `brainstorm-alternatives` -> `brainstorm-selection`.
+2. Understanding checkpoint:
+   - Set `brainstorm-critical-path` to `in_progress`.
    - Run `design_research_fanout` with `phase=brainstorm` (or custom goals) to investigate current state and constraints.
-2. Exploration checkpoint:
+   - Mark task complete and append notes.
+3. Exploration checkpoint:
+   - Unblock dependent tasks, set next task `in_progress`.
    - If needed, run a second `design_research_fanout` call with custom goals focused on alternatives and trade-offs.
+4. Before approach selection, call `design_plan_tracker action=list_tasks` and ensure no required brainstorming task is blocked/pending.
 
 Then:
 

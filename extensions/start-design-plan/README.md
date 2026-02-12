@@ -49,6 +49,10 @@ Actions:
 - `set_status`
 - `append_note`
 - `set_design_path`
+- `add_task`
+- `set_task_status`
+- `append_task_note`
+- `list_tasks`
 - `reset`
 
 ## Commands
