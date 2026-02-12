@@ -121,10 +121,13 @@ Research-gated brainstorming:
 
 Then:
 
-- Propose 2-3 architectural approaches grounded in findings
+- Present a **Research Digest** before asking for a decision:
+  - 3-6 bullets covering what was researched, key findings, and unresolved risks
+  - include concrete file paths/symbols when available
+- Propose 2-3 architectural approaches grounded in that digest
 - Compare trade-offs
 - Prefer existing codebase patterns when sensible
-- Have the user choose
+- Have the user choose (use `ask_user_question`)
 - Validate in small sections
 
 No implementation code. Contracts/interfaces are fine.

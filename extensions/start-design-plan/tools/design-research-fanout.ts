@@ -767,7 +767,13 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI, binding: Rese
 			if (!expanded) {
 				const rolePreviewLines = details.results.slice(0, 3).map((item) => {
 					const icon = item.status === "done" ? "✓" : item.status === "error" ? "✗" : "⏳";
-					return `${icon} ${item.label}: ${goalPreview(item.goal, 52)}`;
+					const preview =
+						item.status === "done"
+							? firstSummaryLine(item.summary)
+							: item.status === "error"
+								? item.error ?? "failed"
+								: `goal: ${goalPreview(item.goal, 44)}`;
+					return `${icon} ${item.label}: ${goalPreview(preview, 70)}`;
 				});
 				const suffix =
 					details.results.length > 3

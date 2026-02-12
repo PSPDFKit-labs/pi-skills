@@ -15,6 +15,7 @@ License for this extension is in `LICENSE` (CC BY-SA 4.0).
 - `design_plan_tracker` tool for five-phase status tracking
 - Progress widget + status line
 - Strict guardrail mode for discrete decisions and completion response shape
+- Research Digest requirement before architecture-direction questions
 - Workflow contract in `assets/workflow.md`
 
 ## Tools

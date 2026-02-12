@@ -123,6 +123,7 @@ export function buildGuardrailSystemPrompt(options: {
 		"start-design-plan strict choice guardrail:",
 		"- Any discrete decision with 2+ options MUST use ask_user_question.",
 		"- Do not present numbered or bulleted option menus directly in assistant text.",
+		"- Before architecture-choice decisions, provide a short Research Digest with findings, risks, and evidence paths.",
 		"- Keep open-ended questions to a single question at a time.",
 	].join("\n");
 }
