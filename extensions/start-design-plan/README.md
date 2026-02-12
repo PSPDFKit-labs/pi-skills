@@ -30,12 +30,17 @@ Parameters:
 
 ### `design_research_fanout`
 
-Parallel research orchestration tool used before clarification and during brainstorming.
+Role-based subagent fanout used before clarification and during brainstorming.
+
+Default role packs:
+- `context`: `codebase-investigator`, `constraints-analyst`, `external-researcher`
+- `brainstorm`: `critical-path-investigator`, `alternatives-analyst`, `industry-researcher`
 
 Parameters:
 - `phase`: `context` | `brainstorm`
 - `topic`: string
-- `goals?`: string[] (custom research goals)
+- `goals?`: string[] (custom goals, converted into analyst tasks)
+- `roles?`: explicit role assignments (`label`, `role`, `goal`, `mode`, `deliverable?`)
 - `includeInternet?`: boolean (defaults to `true`)
 - `maxAgents?`: number (1-4, defaults to `3`)
 

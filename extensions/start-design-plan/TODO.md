@@ -2,7 +2,7 @@
 
 ## Parity / Workflow
 
-- [ ] Add optional subagent orchestration mode (investigator/clarifier/brainstorm roles)
+- [x] Add optional subagent orchestration mode (investigator/clarifier/brainstorm roles) via role-based `design_research_fanout`
 - [ ] Add a setting to choose `single-agent` vs `subagent-assisted` workflow
 - [ ] Add strict guardrail mode so discrete decisions always go through `ask_user_question`
 - [ ] Add richer completion guardrails (force "done + design path only" response shape)

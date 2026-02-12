@@ -5,21 +5,30 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 
 type ResearchPhase = "context" | "brainstorm";
-
 type ResearchMode = "codebase" | "internet" | "hybrid";
+type ResearchRole = "investigator" | "analyst" | "researcher";
 
 type ResearchTask = {
+	readonly id: string;
 	readonly label: string;
+	readonly role: ResearchRole;
 	readonly goal: string;
 	readonly mode: ResearchMode;
+	readonly deliverable: string;
 };
 
 type ResearchTaskResult = {
+	readonly id: string;
 	readonly label: string;
+	readonly role: ResearchRole;
 	readonly goal: string;
 	readonly mode: ResearchMode;
+	readonly deliverable: string;
 	readonly status: "running" | "done" | "error";
 	readonly summary: string;
+	readonly startedAt: string;
+	readonly finishedAt: string | null;
+	readonly durationMs: number | null;
 	readonly error?: string;
 };
 
@@ -35,10 +44,33 @@ const PHASE_SCHEMA = StringEnum(["context", "brainstorm"] as const, {
 	description: "Research phase",
 });
 
+const MODE_SCHEMA = StringEnum(["codebase", "internet", "hybrid"] as const, {
+	description: "Research mode",
+});
+
+const ROLE_SCHEMA = StringEnum(["investigator", "analyst", "researcher"] as const, {
+	description: "Subagent role",
+});
+
+const CUSTOM_ROLE_SCHEMA = Type.Object({
+	label: Type.String({ description: "Display label for this role" }),
+	role: ROLE_SCHEMA,
+	goal: Type.String({ description: "Research goal for this role" }),
+	mode: MODE_SCHEMA,
+	deliverable: Type.Optional(Type.String({ description: "Expected output artifact from this role" })),
+});
+
 const RESEARCH_PARAMS = Type.Object({
 	phase: PHASE_SCHEMA,
 	topic: Type.String({ description: "Design topic under investigation" }),
 	goals: Type.Optional(Type.Array(Type.String({ description: "Specific research goal" }))),
+	roles: Type.Optional(
+		Type.Array(CUSTOM_ROLE_SCHEMA, {
+			description: "Optional explicit role assignments. Overrides default phase roles.",
+			minItems: 1,
+			maxItems: 6,
+		}),
+	),
 	includeInternet: Type.Optional(
 		Type.Boolean({
 			description: "Include internet-oriented research tasks (default: true)",
@@ -56,6 +88,13 @@ const RESEARCH_PARAMS = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory override for research subprocesses" })),
 });
 
+function normalizeLabel(label: string, fallbackIndex: number): string {
+	const trimmed = label.trim().toLowerCase();
+	if (!trimmed) return `role-${fallbackIndex + 1}`;
+	const normalized = trimmed.replace(/[^a-z0-9-]+/g, "-").replace(/-{2,}/g, "-").replace(/^-|-$/g, "");
+	return normalized.length > 0 ? normalized : `role-${fallbackIndex + 1}`;
+}
+
 function buildDefaultTasks(options: {
 	readonly phase: ResearchPhase;
 	readonly includeInternet: boolean;
@@ -63,54 +102,102 @@ function buildDefaultTasks(options: {
 	if (options.phase === "context") {
 		const tasks: Array<ResearchTask> = [
 			{
+				id: "context-codebase-investigator",
 				label: "codebase-investigator",
-				goal: "Identify existing code paths, files, and patterns directly relevant to the design topic.",
+				role: "investigator",
+				goal: "Identify relevant files, symbols, and existing implementation patterns for this topic.",
 				mode: "codebase",
+				deliverable: "Annotated map of existing code paths and pattern references.",
 			},
 			{
-				label: "architecture-investigator",
-				goal: "Identify architectural constraints, dependencies, and integration boundaries in the current codebase.",
+				id: "context-constraints-analyst",
+				label: "constraints-analyst",
+				role: "analyst",
+				goal: "Identify architectural constraints, integration boundaries, and dependency risks.",
 				mode: "hybrid",
+				deliverable: "Constraint and risk matrix with explicit unknowns.",
 			},
 		];
+
 		if (options.includeInternet) {
 			tasks.push({
-				label: "internet-researcher",
-				goal: "Identify current external best practices, standards, and known pitfalls relevant to this topic.",
+				id: "context-external-researcher",
+				label: "external-researcher",
+				role: "researcher",
+				goal: "Identify relevant external standards, best practices, and common failure modes.",
 				mode: "internet",
+				deliverable: "External references and anti-pattern checklist relevant to this design.",
 			});
 		}
+
 		return tasks;
 	}
 
 	const tasks: Array<ResearchTask> = [
 		{
+			id: "brainstorm-critical-path-investigator",
 			label: "critical-path-investigator",
-			goal: "Identify bottlenecks, critical path hotspots, and performance-sensitive boundaries for this topic.",
+			role: "investigator",
+			goal: "Identify performance-sensitive and complexity-critical areas that constrain design choices.",
 			mode: "codebase",
+			deliverable: "Critical path report with concrete hotspots and coupling points.",
 		},
 		{
-			label: "tradeoff-investigator",
-			goal: "Identify viable implementation alternatives and concrete trade-offs grounded in this codebase.",
+			id: "brainstorm-alternatives-analyst",
+			label: "alternatives-analyst",
+			role: "analyst",
+			goal: "Evaluate 2-3 viable architecture alternatives grounded in current codebase constraints.",
 			mode: "hybrid",
+			deliverable: "Trade-off matrix covering complexity, risk, and maintainability.",
 		},
 	];
+
 	if (options.includeInternet) {
 		tasks.push({
+			id: "brainstorm-industry-researcher",
 			label: "industry-researcher",
-			goal: "Identify external benchmark patterns and reference designs relevant to this problem.",
+			role: "researcher",
+			goal: "Find external benchmark patterns and practical lessons that can influence approach selection.",
 			mode: "internet",
+			deliverable: "Comparative benchmark notes with references and applicability caveats.",
 		});
 	}
+
 	return tasks;
 }
 
-function buildCustomTasks(goals: ReadonlyArray<string>): ReadonlyArray<ResearchTask> {
+function buildGoalTasks(goals: ReadonlyArray<string>): ReadonlyArray<ResearchTask> {
 	return goals.map((goal, index) => ({
+		id: `goal-${index + 1}`,
 		label: `research-${index + 1}`,
+		role: "analyst",
 		goal,
 		mode: "hybrid",
+		deliverable: "Focused findings and recommendation for assigned goal.",
 	}));
+}
+
+function buildCustomRoleTasks(roles: ReadonlyArray<{
+	readonly label: string;
+	readonly role: ResearchRole;
+	readonly goal: string;
+	readonly mode: ResearchMode;
+	readonly deliverable?: string;
+}>): ReadonlyArray<ResearchTask> {
+	return roles.map((role, index) => {
+		const label = normalizeLabel(role.label, index);
+		const goal = role.goal.trim();
+		const deliverable = role.deliverable?.trim();
+
+		return {
+			id: `${label}-${index + 1}`,
+			label,
+			role: role.role,
+			goal,
+			mode: role.mode,
+			deliverable: deliverable && deliverable.length > 0 ? deliverable : "Focused findings and recommendation.",
+		};
+	});
 }
 
 function buildResearchPrompt(options: {
@@ -120,31 +207,46 @@ function buildResearchPrompt(options: {
 }): string {
 	const modeHint =
 		options.task.mode === "codebase"
-			? "Prioritize codebase inspection (paths, symbols, dependencies)."
+			? "Prioritize codebase inspection (files, symbols, dependencies, interfaces)."
 			: options.task.mode === "internet"
-				? "Prioritize external standards and best-practice references. If internet tools are unavailable, explicitly say so."
-				: "Use both codebase and external knowledge where possible.";
+				? "Prioritize external standards/docs. If internet tools are unavailable, state that explicitly and continue with local evidence."
+				: "Use both codebase evidence and external references where relevant.";
 
 	return [
-		`You are ${options.task.label}.`,
+		`You are ${options.task.label}, acting as a ${options.task.role} subagent in a coordinated research fanout.`,
 		`Phase: ${options.phase}`,
 		`Topic: ${options.topic}`,
-		`Goal: ${options.task.goal}`,
+		`Assigned goal: ${options.task.goal}`,
+		`Expected deliverable: ${options.task.deliverable}`,
+		"",
+		"Subagent operating contract:",
+		"- Stay focused on your assigned goal; do not solve unrelated design decisions.",
+		"- Prefer concrete evidence over speculation.",
+		"- Include file paths and symbol names for codebase claims.",
+		"- Surface contradictions and unknowns clearly.",
+		"- End with a concise recommendation that another agent could consume.",
 		"",
 		modeHint,
 		"",
-		"Output format:",
+		"Output format (exact headings):",
+		"## Agent Identity",
+		`- label: ${options.task.label}`,
+		`- role: ${options.task.role}`,
+		"",
 		"## Findings",
 		"- concise bullets",
 		"",
 		"## Evidence",
-		"- include concrete file paths / symbols / references where possible",
+		"- concrete file paths / symbols / references",
 		"",
 		"## Risks & Unknowns",
-		"- unresolved assumptions or data gaps",
+		"- unresolved assumptions and data gaps",
 		"",
 		"## Recommendation",
-		"- what this means for the design plan",
+		"- practical guidance for design planning",
+		"",
+		"## Handoff",
+		"- what the next role should verify",
 	].join("\n");
 }
 
@@ -165,16 +267,94 @@ function extractAssistantText(message: unknown): string {
 	return parts.join("\n").trim();
 }
 
+function firstSummaryLine(summary: string): string {
+	const lines = summary
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (lines.length === 0) return "no summary";
+
+	const firstMeaningful = lines.find((line) => !line.startsWith("##"));
+	if (!firstMeaningful) return lines[0];
+	return firstMeaningful.length > 120 ? `${firstMeaningful.slice(0, 120)}…` : firstMeaningful;
+}
+
+function formatDuration(durationMs: number | null): string {
+	if (durationMs === null || durationMs < 0) return "n/a";
+	if (durationMs < 1000) return `${durationMs}ms`;
+	const seconds = Math.round(durationMs / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remainingSeconds = seconds % 60;
+	return remainingSeconds === 0 ? `${minutes}m` : `${minutes}m ${remainingSeconds}s`;
+}
+
 function buildProgressText(details: ResearchDetails): string {
 	const lines: Array<string> = [
 		`Research fanout (${details.phase}) ${details.completed}/${details.launched} complete`,
 	];
 	for (const result of details.results) {
 		const statusIcon = result.status === "done" ? "✓" : result.status === "error" ? "✗" : "⏳";
-		const suffix = result.status === "error" ? ` — ${result.error ?? "failed"}` : "";
-		lines.push(`${statusIcon} ${result.label}${suffix}`);
+		const suffix =
+			result.status === "error"
+				? ` — ${result.error ?? "failed"}`
+				: result.status === "done"
+					? ` — ${firstSummaryLine(result.summary)}`
+					: "";
+		lines.push(`${statusIcon} ${result.label} (${result.role})${suffix}`);
 	}
 	return lines.join("\n");
+}
+
+function extractSignalKeywords(summary: string): ReadonlyArray<string> {
+	const lines = summary
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.startsWith("-") || line.startsWith("*"));
+	if (lines.length === 0) return [];
+	return lines.slice(0, 2).map((line) => line.replace(/^[-*]\s*/, "").trim()).filter((line) => line.length > 0);
+}
+
+function buildSynthesis(details: ResearchDetails): string {
+	const completed = details.results.filter((result) => result.status === "done");
+	const failed = details.results.filter((result) => result.status === "error");
+
+	const digestLines = completed.map((result) => {
+		const signals = extractSignalKeywords(result.summary);
+		if (signals.length === 0) {
+			return `- ${result.label} (${result.role}): ${firstSummaryLine(result.summary)}`;
+		}
+		return `- ${result.label} (${result.role}): ${signals.join(" | ")}`;
+	});
+
+	const riskLines = failed.map((result) => `- ${result.label}: ${result.error ?? "failed"}`);
+
+	const nextStepHints = completed
+		.map((result) => {
+			const lines = result.summary
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line.length > 0);
+			const handoffIndex = lines.findIndex((line) => /^##\s+handoff/i.test(line));
+			if (handoffIndex < 0) return null;
+			const handoffBullet = lines
+				.slice(handoffIndex + 1)
+				.find((line) => line.startsWith("-") || line.startsWith("*"));
+			if (!handoffBullet) return null;
+			return `- ${result.label}: ${handoffBullet.replace(/^[-*]\s*/, "").trim()}`;
+		})
+		.filter((line): line is string => Boolean(line));
+
+	return [
+		"## Cross-Agent Synthesis",
+		digestLines.length > 0 ? digestLines.join("\n") : "- no completed role outputs",
+		"",
+		"## Outstanding Gaps",
+		riskLines.length > 0 ? riskLines.join("\n") : "- none reported",
+		"",
+		"## Suggested Next Checks",
+		nextStepHints.length > 0 ? nextStepHints.join("\n") : "- proceed with clarification/brainstorming using the synthesized findings",
+	].join("\n");
 }
 
 async function runResearchTask(options: {
@@ -190,6 +370,8 @@ async function runResearchTask(options: {
 		task: options.task,
 	});
 
+	const startedAt = new Date().toISOString();
+
 	return await new Promise<ResearchTaskResult>((resolve) => {
 		const args = ["--mode", "json", "-p", "--no-session", prompt];
 		const proc = spawn("pi", args, {
@@ -202,8 +384,9 @@ async function runResearchTask(options: {
 		let stderrBuffer = "";
 		let latestAssistant = "";
 		let aborted = false;
+		let settled = false;
 
-		const killProcess = (): void => {
+		const abortHandler = (): void => {
 			aborted = true;
 			proc.kill("SIGTERM");
 			setTimeout(() => {
@@ -213,11 +396,38 @@ async function runResearchTask(options: {
 			}, 2000);
 		};
 
+		const settle = (result: {
+			readonly status: "done" | "error";
+			readonly summary: string;
+			readonly error?: string;
+		}): void => {
+			if (settled) return;
+			settled = true;
+			if (options.signal) {
+				options.signal.removeEventListener("abort", abortHandler);
+			}
+			const finishedAt = new Date().toISOString();
+			resolve({
+				id: options.task.id,
+				label: options.task.label,
+				role: options.task.role,
+				goal: options.task.goal,
+				mode: options.task.mode,
+				deliverable: options.task.deliverable,
+				status: result.status,
+				summary: result.summary,
+				startedAt,
+				finishedAt,
+				durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+				error: result.error,
+			});
+		};
+
 		if (options.signal) {
 			if (options.signal.aborted) {
-				killProcess();
+				abortHandler();
 			} else {
-				options.signal.addEventListener("abort", killProcess, { once: true });
+				options.signal.addEventListener("abort", abortHandler, { once: true });
 			}
 		}
 
@@ -258,22 +468,16 @@ async function runResearchTask(options: {
 			}
 
 			if (aborted) {
-				resolve({
-					label: options.task.label,
-					goal: options.task.goal,
-					mode: options.task.mode,
+				settle({
 					status: "error",
-					summary: "",
+					summary: latestAssistant,
 					error: "aborted",
 				});
 				return;
 			}
 
 			if ((code ?? 1) !== 0) {
-				resolve({
-					label: options.task.label,
-					goal: options.task.goal,
-					mode: options.task.mode,
+				settle({
 					status: "error",
 					summary: latestAssistant,
 					error: stderrBuffer.trim() || `process exited with code ${code ?? 1}`,
@@ -281,20 +485,14 @@ async function runResearchTask(options: {
 				return;
 			}
 
-			resolve({
-				label: options.task.label,
-				goal: options.task.goal,
-				mode: options.task.mode,
+			settle({
 				status: "done",
 				summary: latestAssistant,
 			});
 		});
 
 		proc.on("error", (error) => {
-			resolve({
-				label: options.task.label,
-				goal: options.task.goal,
-				mode: options.task.mode,
+			settle({
 				status: "error",
 				summary: latestAssistant,
 				error: error.message,
@@ -328,14 +526,21 @@ async function runWithConcurrency<TInput, TResult>(options: {
 
 function renderFinalSummary(details: ResearchDetails): string {
 	const header = `Research fanout complete (${details.completed}/${details.launched})`;
+	const synthesis = buildSynthesis(details);
 	const sections = details.results.map((result) => {
-		const title = `### ${result.label} [${result.status}]`;
+		const title = `### ${result.label} (${result.role}) [${result.status}]`;
+		const metadata = [
+			`- goal: ${result.goal}`,
+			`- mode: ${result.mode}`,
+			`- deliverable: ${result.deliverable}`,
+			`- duration: ${formatDuration(result.durationMs)}`,
+		].join("\n");
 		if (result.status === "error") {
-			return `${title}\n${result.error ?? "Task failed"}`;
+			return `${title}\n${metadata}\n\n${result.error ?? "Task failed"}`;
 		}
-		return `${title}\n${result.summary || "No summary returned"}`;
+		return `${title}\n${metadata}\n\n${result.summary || "No summary returned"}`;
 	});
-	return [header, ...sections].join("\n\n");
+	return [header, synthesis, ...sections].join("\n\n");
 }
 
 export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
@@ -343,7 +548,7 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 		name: "design_research_fanout",
 		label: "Design Research Fanout",
 		description:
-			"Launches parallel research agents for /start-design-plan phases and returns synthesized findings for clarification/brainstorming.",
+			"Launches role-based subagent fanout for /start-design-plan phases and returns labeled findings for clarification/brainstorming.",
 		parameters: RESEARCH_PARAMS,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const topic = params.topic.trim();
@@ -360,9 +565,15 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 			const goalList = (params.goals ?? [])
 				.map((goal) => goal.trim())
 				.filter((goal) => goal.length > 0);
+			const customRoles = (params.roles ?? []).filter((role) => role.goal.trim().length > 0);
 
 			const tasks =
-				goalList.length > 0 ? buildCustomTasks(goalList) : buildDefaultTasks({ phase, includeInternet });
+				customRoles.length > 0
+					? buildCustomRoleTasks(customRoles)
+					: goalList.length > 0
+						? buildGoalTasks(goalList)
+						: buildDefaultTasks({ phase, includeInternet });
+
 			if (tasks.length === 0) {
 				return {
 					content: [{ type: "text", text: "No research tasks to run" }],
@@ -378,11 +589,17 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 
 			const cwd = params.cwd?.trim() || ctx.cwd;
 			const runningResults: Array<ResearchTaskResult> = tasks.map((task) => ({
+				id: task.id,
 				label: task.label,
+				role: task.role,
 				goal: task.goal,
 				mode: task.mode,
+				deliverable: task.deliverable,
 				status: "running",
 				summary: "",
+				startedAt: new Date().toISOString(),
+				finishedAt: null,
+				durationMs: null,
 			}));
 
 			const emitProgress = (): void => {
@@ -439,11 +656,13 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 		},
 		renderCall(args, theme) {
 			const phase = typeof args.phase === "string" ? args.phase : "context";
+			const roleCount = Array.isArray(args.roles) ? args.roles.length : 0;
 			const goals = Array.isArray(args.goals) ? args.goals.length : 0;
+			const mode = roleCount > 0 ? `${roleCount} explicit roles` : goals > 0 ? `${goals} custom goals` : "default roles";
 			const text =
 				theme.fg("toolTitle", theme.bold("design_research_fanout ")) +
 				theme.fg("accent", `${phase}`) +
-				theme.fg("muted", ` • ${goals > 0 ? `${goals} custom goals` : "default goals"}`);
+				theme.fg("muted", ` • ${mode}`);
 			return new Text(text, 0, 0);
 		},
 		renderResult(result, { expanded }, theme) {
@@ -455,21 +674,38 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 
 			const done = details.results.filter((item) => item.status === "done").length;
 			const failed = details.results.filter((item) => item.status === "error").length;
+			const running = details.results.filter((item) => item.status === "running").length;
 			const header =
 				theme.fg("success", `✓ ${done}`) +
 				theme.fg("muted", ` done`) +
 				(failed > 0 ? ` ${theme.fg("warning", `• ${failed} failed`)}` : "") +
+				(running > 0 ? ` ${theme.fg("warning", `• ${running} running`)}` : "") +
 				theme.fg("dim", ` • phase ${details.phase}`);
 
 			if (!expanded) {
-				return new Text(header, 0, 0);
+				const rolePreview = details.results
+					.slice(0, 3)
+					.map((item) => {
+						const icon = item.status === "done" ? "✓" : item.status === "error" ? "✗" : "⏳";
+						return `${icon} ${item.label}`;
+					})
+					.join(" • ");
+				const suffix = details.results.length > 3 ? ` • +${details.results.length - 3} more` : "";
+				return new Text(`${header}\n${theme.fg("muted", rolePreview + suffix)}`, 0, 0);
 			}
 
 			const lines = [header];
 			for (const item of details.results) {
 				const icon = item.status === "done" ? "✓" : item.status === "error" ? "✗" : "⏳";
-				const detailLine = item.status === "error" ? item.error ?? "failed" : "ok";
-				lines.push(`${icon} ${item.label} — ${detailLine}`);
+				const detailLine =
+					item.status === "error"
+						? item.error ?? "failed"
+						: item.status === "running"
+							? "running"
+							: firstSummaryLine(item.summary);
+				lines.push(
+					`${icon} ${item.label} (${item.role}) • ${item.mode} • ${formatDuration(item.durationMs)} — ${detailLine}`,
+				);
 			}
 			return new Text(lines.join("\n"), 0, 0);
 		},

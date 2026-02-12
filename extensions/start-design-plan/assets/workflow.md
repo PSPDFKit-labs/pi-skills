@@ -26,6 +26,7 @@ You are running an orchestrated design workflow. Follow this five-phase sequence
 - Research-first requirement (from ed3d flow):
   - Before Phase 2 clarification questions, run `design_research_fanout` with `phase=context`.
   - During Phase 4 brainstorming, run `design_research_fanout` with `phase=brainstorm` before selecting approaches.
+  - Read outputs by role label (`*-investigator`, `*-analyst`, `*-researcher`) and preserve important findings in tracker notes.
   - Use findings to reduce low-value questions and ground trade-off discussion.
 - Task graph requirement:
   - Represent research/exploration work as explicit tasks with dependencies.
