@@ -42,9 +42,9 @@ Parameters:
 - `topic`: string
 - `goals?`: string[] (custom goals, converted into analyst tasks)
 - `roles?`: explicit role assignments (`label`, `role`, `goal`, `mode`, `deliverable?`)
-- `includeInternet?`: boolean (defaults to `true`)
-- `maxAgents?`: number (1-4, defaults to `3`)
-- `model?`: string (optional model id to run all research agents)
+- `includeInternet?`: boolean (optional override of `/design-plan-config`)
+- `maxAgents?`: number (1-4, optional override of `/design-plan-config`)
+- `model?`: string (optional override of `/design-plan-config`)
 
 ### `design_plan_tracker`
 
@@ -75,6 +75,17 @@ If no topic is supplied, the command prompts for one.
 Resumes an in-progress design workflow from the stored tracker state.
 
 Optional guidance is passed through as additional instruction for the resumed run.
+
+### `/design-plan-config [status|reset|model <id|default>|max-agents <1-4>|include-internet <on|off>]`
+
+Configures default behavior for research fanout tool calls made during the design workflow.
+
+Defaults:
+- `model=default`
+- `maxAgents=3`
+- `includeInternet=on`
+
+These defaults are automatically applied when the assistant calls `design_research_fanout` without explicit overrides.
 
 ### `/design-plan-guardrails [strict|relaxed|status]`
 

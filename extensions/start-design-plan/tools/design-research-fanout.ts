@@ -3,6 +3,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import type { DesignPlanConfig } from "../core/config";
 
 type ResearchPhase = "context" | "brainstorm";
 type ResearchMode = "codebase" | "internet" | "hybrid";
@@ -42,6 +43,10 @@ type ResearchDetails = {
 	readonly results: ReadonlyArray<ResearchTaskResult>;
 };
 
+type ResearchFanoutBinding = {
+	readonly getConfig: () => DesignPlanConfig;
+};
+
 const PHASE_SCHEMA = StringEnum(["context", "brainstorm"] as const, {
 	description: "Research phase",
 });
@@ -75,13 +80,13 @@ const RESEARCH_PARAMS = Type.Object({
 	),
 	includeInternet: Type.Optional(
 		Type.Boolean({
-			description: "Include internet-oriented research tasks (default: true)",
+			description: "Include internet-oriented tasks (overrides /design-plan-config setting)",
 			default: true,
 		}),
 	),
 	maxAgents: Type.Optional(
 		Type.Number({
-			description: "Maximum concurrent research agents (1-4, default 3)",
+			description: "Maximum concurrent agents 1-4 (overrides /design-plan-config setting)",
 			minimum: 1,
 			maximum: 4,
 			default: 3,
@@ -89,7 +94,7 @@ const RESEARCH_PARAMS = Type.Object({
 	),
 	model: Type.Optional(
 		Type.String({
-			description: "Model id to use for all research agents (for example: claude-haiku-4-5)",
+			description: "Model id for all research agents (overrides /design-plan-config setting)",
 		}),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory override for research subprocesses" })),
@@ -585,12 +590,12 @@ function renderFinalSummary(details: ResearchDetails): string {
 	return [header, modelLine, synthesis, ...sections].filter((part): part is string => Boolean(part)).join("\n\n");
 }
 
-export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
+export function registerDesignResearchFanoutTool(pi: ExtensionAPI, binding: ResearchFanoutBinding): void {
 	pi.registerTool({
 		name: "design_research_fanout",
 		label: "Design Research Fanout",
 		description:
-			"Launches role-based subagent fanout for /start-design-plan phases and returns labeled findings for clarification/brainstorming.",
+			"Launches role-based subagent fanout for /start-design-plan phases. Applies /design-plan-config defaults unless call params override them.",
 		parameters: RESEARCH_PARAMS,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const topic = params.topic.trim();
@@ -602,9 +607,11 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 			}
 
 			const phase = params.phase as ResearchPhase;
-			const includeInternet = params.includeInternet !== false;
-			const maxAgents = Math.max(1, Math.min(4, Math.floor(params.maxAgents ?? 3)));
-			const selectedModel = params.model?.trim() ? params.model.trim() : null;
+			const config = binding.getConfig();
+			const includeInternet =
+				params.includeInternet === undefined ? config.researchIncludeInternet : params.includeInternet !== false;
+			const maxAgents = Math.max(1, Math.min(4, Math.floor(params.maxAgents ?? config.researchMaxAgents)));
+			const selectedModel = params.model?.trim() ? params.model.trim() : config.researchModel;
 			const goalList = (params.goals ?? [])
 				.map((goal) => goal.trim())
 				.filter((goal) => goal.length > 0);

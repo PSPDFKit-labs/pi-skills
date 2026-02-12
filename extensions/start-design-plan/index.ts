@@ -10,6 +10,13 @@ import {
 	validateCompletionResponse,
 	type GuardrailMode,
 } from "./core/guardrails";
+import {
+	DEFAULT_DESIGN_PLAN_CONFIG,
+	persistDesignPlanConfig,
+	reconstructDesignPlanConfig,
+	withDesignPlanConfigPatch,
+	type DesignPlanConfig,
+} from "./core/config";
 import { buildKickoffPrompt, buildResumePrompt } from "./core/prompt";
 import { TRACKER_ENTRY_TYPE, createInitialTrackerState } from "./core/state";
 import type { DesignTrackerState } from "./core/types";
@@ -48,9 +55,35 @@ function guardrailStatusText(mode: GuardrailMode): string {
 		: "relaxed (prompt-guided only)";
 }
 
+function parseBooleanArg(value: string): boolean | null {
+	switch (value.trim().toLowerCase()) {
+		case "true":
+		case "on":
+		case "yes":
+		case "1":
+			return true;
+		case "false":
+		case "off":
+		case "no":
+		case "0":
+			return false;
+		default:
+			return null;
+	}
+}
+
+function formatConfigSummary(config: DesignPlanConfig): string {
+	return [
+		`model=${config.researchModel ?? "default"}`,
+		`maxAgents=${config.researchMaxAgents}`,
+		`includeInternet=${config.researchIncludeInternet ? "on" : "off"}`,
+	].join(" • ");
+}
+
 export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 	let state: DesignTrackerState | null = null;
 	let guardrailMode: GuardrailMode = DEFAULT_GUARDRAIL_MODE;
+	let config: DesignPlanConfig = DEFAULT_DESIGN_PLAN_CONFIG;
 
 	const setState = (next: DesignTrackerState | null): void => {
 		state = next;
@@ -60,9 +93,14 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 		guardrailMode = next;
 	};
 
+	const setConfig = (next: DesignPlanConfig): void => {
+		config = next;
+	};
+
 	const onSessionEvent = (ctx: ExtensionContext): void => {
 		state = reconstructTrackerState(ctx);
 		guardrailMode = reconstructGuardrailMode(ctx);
+		config = reconstructDesignPlanConfig(ctx);
 		refreshUi(ctx, state);
 	};
 
@@ -143,7 +181,9 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 	});
 
 	registerAskUserQuestionTool(pi);
-	registerDesignResearchFanoutTool(pi);
+	registerDesignResearchFanoutTool(pi, {
+		getConfig: () => config,
+	});
 	registerDesignPlanTrackerTool(pi, {
 		getState: () => state,
 		setState,
@@ -206,6 +246,87 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 			});
 			pi.sendUserMessage(resumePrompt);
 			ctx.ui.notify("Resuming design workflow", "info");
+		},
+	});
+
+	pi.registerCommand("design-plan-config", {
+		description:
+			"Configure start-design-plan defaults (usage: /design-plan-config [status|reset|model <id|default>|max-agents <1-4>|include-internet <on|off>])",
+		handler: async (args, ctx) => {
+			const tokens = args
+				.trim()
+				.split(/\s+/)
+				.filter((token) => token.length > 0);
+			const action = tokens[0]?.toLowerCase() ?? "status";
+
+			if (action === "status") {
+				ctx.ui.notify(`Design-plan config: ${formatConfigSummary(config)}`, "info");
+				return;
+			}
+
+			if (action === "reset") {
+				setConfig(DEFAULT_DESIGN_PLAN_CONFIG);
+				persistDesignPlanConfig(pi, DEFAULT_DESIGN_PLAN_CONFIG);
+				ctx.ui.notify(`Design-plan config reset: ${formatConfigSummary(DEFAULT_DESIGN_PLAN_CONFIG)}`, "info");
+				return;
+			}
+
+			if (action === "model") {
+				const modelValue = tokens.slice(1).join(" ").trim();
+				const nextModel =
+					modelValue.length === 0 ||
+					modelValue.toLowerCase() === "default" ||
+					modelValue.toLowerCase() === "none" ||
+					modelValue.toLowerCase() === "null"
+						? null
+						: modelValue;
+				const next = withDesignPlanConfigPatch({
+					config,
+					patch: { researchModel: nextModel },
+				});
+				setConfig(next);
+				persistDesignPlanConfig(pi, next);
+				ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+				return;
+			}
+
+			if (action === "max-agents") {
+				const raw = tokens[1] ?? "";
+				const parsed = Number.parseInt(raw, 10);
+				if (!Number.isFinite(parsed) || parsed < 1 || parsed > 4) {
+					ctx.ui.notify("Invalid max-agents. Use a number between 1 and 4.", "warning");
+					return;
+				}
+				const next = withDesignPlanConfigPatch({
+					config,
+					patch: { researchMaxAgents: parsed },
+				});
+				setConfig(next);
+				persistDesignPlanConfig(pi, next);
+				ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+				return;
+			}
+
+			if (action === "include-internet") {
+				const value = parseBooleanArg(tokens[1] ?? "");
+				if (value === null) {
+					ctx.ui.notify("Invalid include-internet value. Use on/off.", "warning");
+					return;
+				}
+				const next = withDesignPlanConfigPatch({
+					config,
+					patch: { researchIncludeInternet: value },
+				});
+				setConfig(next);
+				persistDesignPlanConfig(pi, next);
+				ctx.ui.notify(`Design-plan config updated: ${formatConfigSummary(next)}`, "info");
+				return;
+			}
+
+			ctx.ui.notify(
+				"Invalid config command. Use status, reset, model, max-agents, or include-internet.",
+				"warning",
+			);
 		},
 	});
 
