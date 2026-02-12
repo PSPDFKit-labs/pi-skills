@@ -44,6 +44,7 @@ Parameters:
 - `roles?`: explicit role assignments (`label`, `role`, `goal`, `mode`, `deliverable?`)
 - `includeInternet?`: boolean (defaults to `true`)
 - `maxAgents?`: number (1-4, defaults to `3`)
+- `model?`: string (optional model id to run all research agents)
 
 ### `design_plan_tracker`
 

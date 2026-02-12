@@ -29,12 +29,14 @@ type ResearchTaskResult = {
 	readonly startedAt: string;
 	readonly finishedAt: string | null;
 	readonly durationMs: number | null;
+	readonly model: string | null;
 	readonly error?: string;
 };
 
 type ResearchDetails = {
 	readonly phase: ResearchPhase;
 	readonly topic: string;
+	readonly model: string | null;
 	readonly launched: number;
 	readonly completed: number;
 	readonly results: ReadonlyArray<ResearchTaskResult>;
@@ -83,6 +85,11 @@ const RESEARCH_PARAMS = Type.Object({
 			minimum: 1,
 			maximum: 4,
 			default: 3,
+		}),
+	),
+	model: Type.Optional(
+		Type.String({
+			description: "Model id to use for all research agents (for example: claude-haiku-4-5)",
 		}),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory override for research subprocesses" })),
@@ -315,8 +322,9 @@ function formatDuration(durationMs: number | null): string {
 }
 
 function buildProgressText(details: ResearchDetails): string {
+	const modelSuffix = details.model ? ` • model ${details.model}` : "";
 	const lines: Array<string> = [
-		`Research fanout (${details.phase}) ${details.completed}/${details.launched} complete`,
+		`Research fanout (${details.phase}) ${details.completed}/${details.launched} complete${modelSuffix}`,
 	];
 	for (const result of details.results) {
 		const statusIcon = result.status === "done" ? "✓" : result.status === "error" ? "✗" : "⏳";
@@ -388,6 +396,7 @@ async function runResearchTask(options: {
 	readonly topic: string;
 	readonly task: ResearchTask;
 	readonly cwd: string;
+	readonly model: string | null;
 	readonly signal?: AbortSignal;
 }): Promise<ResearchTaskResult> {
 	const prompt = buildResearchPrompt({
@@ -399,7 +408,11 @@ async function runResearchTask(options: {
 	const startedAt = new Date().toISOString();
 
 	return await new Promise<ResearchTaskResult>((resolve) => {
-		const args = ["--mode", "json", "-p", "--no-session", prompt];
+		const args = ["--mode", "json", "-p", "--no-session"];
+		if (options.model) {
+			args.push("--model", options.model);
+		}
+		args.push(prompt);
 		const proc = spawn("pi", args, {
 			cwd: options.cwd,
 			shell: false,
@@ -445,6 +458,7 @@ async function runResearchTask(options: {
 				startedAt,
 				finishedAt,
 				durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+				model: options.model,
 				error: result.error,
 			});
 		};
@@ -552,12 +566,14 @@ async function runWithConcurrency<TInput, TResult>(options: {
 
 function renderFinalSummary(details: ResearchDetails): string {
 	const header = `Research fanout complete (${details.completed}/${details.launched})`;
+	const modelLine = details.model ? `Model: ${details.model}` : null;
 	const synthesis = buildSynthesis(details);
 	const sections = details.results.map((result) => {
 		const title = `### ${result.label} (${result.role}) [${result.status}]`;
 		const metadata = [
 			`- goal: ${result.goal}`,
 			`- mode: ${result.mode}`,
+			`- model: ${result.model ?? "default"}`,
 			`- deliverable: ${result.deliverable}`,
 			`- duration: ${formatDuration(result.durationMs)}`,
 		].join("\n");
@@ -566,7 +582,7 @@ function renderFinalSummary(details: ResearchDetails): string {
 		}
 		return `${title}\n${metadata}\n\n${result.summary || "No summary returned"}`;
 	});
-	return [header, synthesis, ...sections].join("\n\n");
+	return [header, modelLine, synthesis, ...sections].filter((part): part is string => Boolean(part)).join("\n\n");
 }
 
 export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
@@ -588,6 +604,7 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 			const phase = params.phase as ResearchPhase;
 			const includeInternet = params.includeInternet !== false;
 			const maxAgents = Math.max(1, Math.min(4, Math.floor(params.maxAgents ?? 3)));
+			const selectedModel = params.model?.trim() ? params.model.trim() : null;
 			const goalList = (params.goals ?? [])
 				.map((goal) => goal.trim())
 				.filter((goal) => goal.length > 0);
@@ -606,6 +623,7 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 					details: {
 						phase,
 						topic,
+						model: selectedModel,
 						launched: 0,
 						completed: 0,
 						results: [],
@@ -626,6 +644,7 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 				startedAt: new Date().toISOString(),
 				finishedAt: null,
 				durationMs: null,
+				model: selectedModel,
 			}));
 
 			const emitProgress = (): void => {
@@ -634,6 +653,7 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 				const details: ResearchDetails = {
 					phase,
 					topic,
+					model: selectedModel,
 					launched: runningResults.length,
 					completed,
 					results: [...runningResults],
@@ -655,6 +675,7 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 						topic,
 						task,
 						cwd,
+						model: selectedModel,
 						signal,
 					});
 					runningResults[index] = result;
@@ -668,6 +689,7 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 			const details: ResearchDetails = {
 				phase,
 				topic,
+				model: selectedModel,
 				launched: results.length,
 				completed,
 				results,
@@ -684,11 +706,13 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 			const phase = typeof args.phase === "string" ? args.phase : "context";
 			const roleCount = Array.isArray(args.roles) ? args.roles.length : 0;
 			const goals = Array.isArray(args.goals) ? args.goals.length : 0;
+			const selectedModel = typeof args.model === "string" && args.model.trim().length > 0 ? args.model.trim() : null;
 			const mode = roleCount > 0 ? `${roleCount} explicit roles` : goals > 0 ? `${goals} custom goals` : "default roles";
 			const header =
 				theme.fg("toolTitle", theme.bold("design_research_fanout ")) +
 				theme.fg("accent", `${phase}`) +
-				theme.fg("muted", ` • ${mode}`);
+				theme.fg("muted", ` • ${mode}`) +
+				(selectedModel ? theme.fg("dim", ` • model ${selectedModel}`) : "");
 
 			const previews: Array<string> = [];
 			if (Array.isArray(args.goals)) {
@@ -724,12 +748,14 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI): void {
 			const done = details.results.filter((item) => item.status === "done").length;
 			const failed = details.results.filter((item) => item.status === "error").length;
 			const running = details.results.filter((item) => item.status === "running").length;
+			const modelSuffix = details.model ? theme.fg("dim", ` • model ${details.model}`) : "";
 			const header =
 				theme.fg("success", `✓ ${done}`) +
 				theme.fg("muted", ` done`) +
 				(failed > 0 ? ` ${theme.fg("warning", `• ${failed} failed`)}` : "") +
 				(running > 0 ? ` ${theme.fg("warning", `• ${running} running`)}` : "") +
-				theme.fg("dim", ` • phase ${details.phase}`);
+				theme.fg("dim", ` • phase ${details.phase}`) +
+				modelSuffix;
 
 			if (!expanded) {
 				const rolePreviewLines = details.results.slice(0, 3).map((item) => {
