@@ -452,25 +452,9 @@ function buildSynthesisPrompt(details: ResearchDetails): string {
 	].join("\n");
 }
 
-function buildSynthesisFallback(error: string): string {
-	return [
-		"## Cross-Agent Synthesis",
-		`- synthesis unavailable: ${error}`,
-		"",
-		"## Top Risks",
-		"- synthesis unavailable",
-		"- review per-agent outputs below",
-		"- rerun fanout if needed",
-		"",
-		"## Recommended Direction",
-		"- Use the per-agent findings below as the source of truth.",
-		"- Confidence: low",
-		"",
-		"## What to Measure Next",
-		"- confirm model + role outputs completed",
-		"- verify evidence paths and references",
-		"- rerun synthesis if required",
-	].join("\n");
+function toErrorMessage(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	return String(error);
 }
 
 async function runResearchTask(options: {
@@ -691,7 +675,7 @@ async function runSynthesisWithLlm(options: {
 		selectedModel: options.selectedModel,
 	});
 	if (!selection) {
-		return buildSynthesisFallback("no model/api key available for synthesis");
+		throw new Error("no model/api key available for synthesis");
 	}
 
 	const userMessage: UserMessage = {
@@ -700,34 +684,29 @@ async function runSynthesisWithLlm(options: {
 		timestamp: Date.now(),
 	};
 
-	try {
-		const response = await complete(
-			selection.model,
-			{ messages: [userMessage] },
-			{ apiKey: selection.apiKey },
-		);
+	const response = await complete(
+		selection.model,
+		{ messages: [userMessage] },
+		{ apiKey: selection.apiKey },
+	);
 
-		if (response.stopReason === "aborted" || response.stopReason === "error") {
-			return buildSynthesisFallback(`synthesis model stopped: ${response.stopReason}`);
-		}
-
-		const synthesis = response.content
-			.filter((item): item is { readonly type: "text"; readonly text: string } => item.type === "text")
-			.map((item) => item.text)
-			.join("\n")
-			.trim();
-
-		if (!synthesis) {
-			return buildSynthesisFallback("no synthesis output returned");
-		}
-		if (!isValidSynthesisShape(synthesis)) {
-			return buildSynthesisFallback("synthesis output missing required headings");
-		}
-		return synthesis;
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		return buildSynthesisFallback(message);
+	if (response.stopReason === "aborted" || response.stopReason === "error") {
+		throw new Error(`synthesis model stopped: ${response.stopReason}`);
 	}
+
+	const synthesis = response.content
+		.filter((item): item is { readonly type: "text"; readonly text: string } => item.type === "text")
+		.map((item) => item.text)
+		.join("\n")
+		.trim();
+
+	if (!synthesis) {
+		throw new Error("no synthesis output returned");
+	}
+	if (!isValidSynthesisShape(synthesis)) {
+		throw new Error("synthesis output missing required headings");
+	}
+	return synthesis;
 }
 
 async function runWithConcurrency<TInput, TResult>(options: {
@@ -891,11 +870,21 @@ export function registerDesignResearchFanoutTool(pi: ExtensionAPI, binding: Rese
 				results,
 			};
 
-			const synthesis = await runSynthesisWithLlm({
-				ctx,
-				details,
-				selectedModel,
-			});
+			let synthesis: string;
+			try {
+				synthesis = await runSynthesisWithLlm({
+					ctx,
+					details,
+					selectedModel,
+				});
+			} catch (error) {
+				return {
+					content: [{ type: "text", text: `Error: synthesis failed: ${toErrorMessage(error)}` }],
+					details,
+					isError: true,
+				};
+			}
+
 			const summary = renderFinalSummary({ details, synthesis });
 			return {
 				content: [{ type: "text", text: summary }],
