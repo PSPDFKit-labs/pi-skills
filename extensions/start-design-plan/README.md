@@ -81,7 +81,7 @@ Optional guidance is passed through as additional instruction for the resumed ru
 
 Configures default behavior for research fanout tool calls made during the design workflow.
 
-Configuration is persisted per project at `.pi/design-plan-config.json`.
+Configuration is persisted globally at `~/.pi/agent/design-plan-config.json` (or `$PI_CODING_AGENT_DIR/design-plan-config.json` if set).
 
 - With no arguments (interactive UI mode), opens a config menu with a model selector.
 - With arguments, supports scriptable text commands.

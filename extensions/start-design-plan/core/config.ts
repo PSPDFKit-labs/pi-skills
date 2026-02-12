@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
@@ -39,6 +40,15 @@ function normalizeResearchIncludeInternet(value: unknown): boolean {
 	return value;
 }
 
+function isDefaultConfig(config: DesignPlanConfig): boolean {
+	return (
+		config.version === DEFAULT_DESIGN_PLAN_CONFIG.version &&
+		config.researchModel === DEFAULT_DESIGN_PLAN_CONFIG.researchModel &&
+		config.researchMaxAgents === DEFAULT_DESIGN_PLAN_CONFIG.researchMaxAgents &&
+		config.researchIncludeInternet === DEFAULT_DESIGN_PLAN_CONFIG.researchIncludeInternet
+	);
+}
+
 export function normalizeDesignPlanConfig(value: unknown): DesignPlanConfig {
 	if (!value || typeof value !== "object") {
 		return DEFAULT_DESIGN_PLAN_CONFIG;
@@ -68,6 +78,18 @@ export function normalizeDesignPlanConfig(value: unknown): DesignPlanConfig {
 	};
 }
 
+function getPiAgentDirectory(): string {
+	const explicit = process.env.PI_CODING_AGENT_DIR?.trim();
+	if (explicit && explicit.length > 0) {
+		return path.resolve(explicit);
+	}
+	return path.join(os.homedir(), ".pi", "agent");
+}
+
+function getGlobalConfigPath(): string {
+	return path.join(getPiAgentDirectory(), DESIGN_PLAN_CONFIG_FILE_NAME);
+}
+
 function findProjectRoot(startCwd: string): string {
 	let current = path.resolve(startCwd);
 	while (true) {
@@ -82,7 +104,7 @@ function findProjectRoot(startCwd: string): string {
 	}
 }
 
-function getConfigPathFromCwd(cwd: string): string {
+function getLegacyProjectConfigPath(cwd: string): string {
 	const projectRoot = findProjectRoot(cwd);
 	return path.join(projectRoot, ".pi", DESIGN_PLAN_CONFIG_FILE_NAME);
 }
@@ -107,28 +129,32 @@ function reconstructLegacySessionConfig(ctx: ExtensionContext): DesignPlanConfig
 	return latest;
 }
 
-export function persistDesignPlanConfig(options: {
-	readonly cwd: string;
-	readonly config: DesignPlanConfig;
-}): void {
-	const filePath = getConfigPathFromCwd(options.cwd);
+export function persistDesignPlanConfig(config: DesignPlanConfig): void {
+	const filePath = getGlobalConfigPath();
 	const directoryPath = path.dirname(filePath);
 	mkdirSync(directoryPath, { recursive: true, mode: 0o700 });
-	writeFileSync(filePath, `${JSON.stringify(options.config, null, 2)}\n`, "utf8");
+	writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
 export function reconstructDesignPlanConfig(ctx: ExtensionContext): DesignPlanConfig {
-	const filePath = getConfigPathFromCwd(ctx.cwd);
-	const fromFile = readConfigFromFile(filePath);
-	if (fromFile) {
-		return fromFile;
+	const globalPath = getGlobalConfigPath();
+	const fromGlobal = readConfigFromFile(globalPath);
+	if (fromGlobal) {
+		return fromGlobal;
 	}
 
-	const legacy = reconstructLegacySessionConfig(ctx);
-	if (legacy !== DEFAULT_DESIGN_PLAN_CONFIG) {
-		persistDesignPlanConfig({ cwd: ctx.cwd, config: legacy });
+	const legacyProjectPath = getLegacyProjectConfigPath(ctx.cwd);
+	const fromLegacyProject = readConfigFromFile(legacyProjectPath);
+	if (fromLegacyProject) {
+		persistDesignPlanConfig(fromLegacyProject);
+		return fromLegacyProject;
 	}
-	return legacy;
+
+	const legacySession = reconstructLegacySessionConfig(ctx);
+	if (!isDefaultConfig(legacySession)) {
+		persistDesignPlanConfig(legacySession);
+	}
+	return legacySession;
 }
 
 export function withDesignPlanConfigPatch(options: {

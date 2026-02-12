@@ -142,7 +142,6 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 	let state: DesignTrackerState | null = null;
 	let guardrailMode: GuardrailMode = DEFAULT_GUARDRAIL_MODE;
 	let config: DesignPlanConfig = DEFAULT_DESIGN_PLAN_CONFIG;
-	let configCwd: string | null = null;
 
 	const setState = (next: DesignTrackerState | null): void => {
 		state = next;
@@ -158,8 +157,7 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 
 	const saveConfig = (next: DesignPlanConfig): void => {
 		setConfig(next);
-		const cwd = configCwd ?? process.cwd();
-		persistDesignPlanConfig({ cwd, config: next });
+		persistDesignPlanConfig(next);
 	};
 
 	const applyConfigPatch = (patch: Partial<Omit<DesignPlanConfig, "version">>): DesignPlanConfig => {
@@ -169,7 +167,6 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 	};
 
 	const onSessionEvent = (ctx: ExtensionContext): void => {
-		configCwd = ctx.cwd;
 		state = reconstructTrackerState(ctx);
 		guardrailMode = reconstructGuardrailMode(ctx);
 		config = reconstructDesignPlanConfig(ctx);
@@ -189,7 +186,6 @@ export default function startDesignPlanExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		configCwd = null;
 		ctx.ui.setWidget("start-design-plan", undefined);
 		ctx.ui.setStatus("start-design-plan", undefined);
 	});
