@@ -1,0 +1,1085 @@
+import { spawn } from "node:child_process";
+import { complete, StringEnum, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
+import type { DesignPlanConfig } from "../core/config";
+
+type ResearchPhase = "context" | "brainstorm";
+type ResearchMode = "codebase" | "internet" | "hybrid";
+type ResearchRole = "investigator" | "analyst" | "researcher";
+
+type ResearchTask = {
+	readonly id: string;
+	readonly label: string;
+	readonly role: ResearchRole;
+	readonly goal: string;
+	readonly mode: ResearchMode;
+	readonly deliverable: string;
+};
+
+type ResearchTaskResult = {
+	readonly id: string;
+	readonly label: string;
+	readonly role: ResearchRole;
+	readonly goal: string;
+	readonly mode: ResearchMode;
+	readonly deliverable: string;
+	readonly status: "running" | "done" | "error";
+	readonly summary: string;
+	readonly startedAt: string;
+	readonly finishedAt: string | null;
+	readonly durationMs: number | null;
+	readonly model: string | null;
+	readonly error?: string;
+};
+
+type ResearchDetails = {
+	readonly phase: ResearchPhase;
+	readonly topic: string;
+	readonly model: string | null;
+	readonly launched: number;
+	readonly completed: number;
+	readonly results: ReadonlyArray<ResearchTaskResult>;
+};
+
+type ResearchFanoutBinding = {
+	readonly getConfig: () => DesignPlanConfig;
+};
+
+const PHASE_SCHEMA = StringEnum(["context", "brainstorm"] as const, {
+	description: "Research phase",
+});
+
+const MODE_SCHEMA = StringEnum(["codebase", "internet", "hybrid"] as const, {
+	description: "Research mode",
+});
+
+const ROLE_SCHEMA = StringEnum(["investigator", "analyst", "researcher"] as const, {
+	description: "Subagent role",
+});
+
+const CUSTOM_ROLE_SCHEMA = Type.Object({
+	label: Type.String({ description: "Display label for this role" }),
+	role: ROLE_SCHEMA,
+	goal: Type.String({ description: "Research goal for this role" }),
+	mode: MODE_SCHEMA,
+	deliverable: Type.Optional(Type.String({ description: "Expected output artifact from this role" })),
+});
+
+const RESEARCH_PARAMS = Type.Object({
+	phase: PHASE_SCHEMA,
+	topic: Type.String({ description: "Design topic under investigation" }),
+	goals: Type.Optional(Type.Array(Type.String({ description: "Specific research goal" }))),
+	roles: Type.Optional(
+		Type.Array(CUSTOM_ROLE_SCHEMA, {
+			description: "Optional explicit role assignments. Overrides default phase roles.",
+			minItems: 1,
+			maxItems: 6,
+		}),
+	),
+	includeInternet: Type.Optional(
+		Type.Boolean({
+			description: "Include internet-oriented tasks (overrides /design-plan-config setting)",
+			default: true,
+		}),
+	),
+	maxAgents: Type.Optional(
+		Type.Number({
+			description: "Maximum concurrent agents 1-4 (overrides /design-plan-config setting)",
+			minimum: 1,
+			maximum: 4,
+			default: 3,
+		}),
+	),
+	model: Type.Optional(
+		Type.String({
+			description: "Model id for all research agents (overrides /design-plan-config setting)",
+		}),
+	),
+	cwd: Type.Optional(Type.String({ description: "Working directory override for research subprocesses" })),
+});
+
+function normalizeLabel(label: string, fallbackIndex: number): string {
+	const trimmed = label.trim().toLowerCase();
+	if (!trimmed) return `role-${fallbackIndex + 1}`;
+	const normalized = trimmed.replace(/[^a-z0-9-]+/g, "-").replace(/-{2,}/g, "-").replace(/^-|-$/g, "");
+	return normalized.length > 0 ? normalized : `role-${fallbackIndex + 1}`;
+}
+
+function truncateText(text: string, maxLength: number): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	if (normalized.length <= maxLength) return normalized;
+	return `${normalized.slice(0, Math.max(1, maxLength - 1))}…`;
+}
+
+function goalPreview(goal: string, maxLength = 72): string {
+	return truncateText(goal, maxLength);
+}
+
+function goalLabelFromText(goal: string, fallbackIndex: number): string {
+	const tokens = goal
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]+/g, " ")
+		.split(/\s+/)
+		.filter((token) => token.length > 0)
+		.slice(0, 4);
+	const core = tokens.join("-").replace(/-{2,}/g, "-").replace(/^-|-$/g, "");
+	if (!core) return `research-${fallbackIndex + 1}`;
+	return `research-${fallbackIndex + 1}-${core.slice(0, 28)}`;
+}
+
+function buildDefaultTasks(options: {
+	readonly phase: ResearchPhase;
+	readonly includeInternet: boolean;
+}): ReadonlyArray<ResearchTask> {
+	if (options.phase === "context") {
+		const tasks: Array<ResearchTask> = [
+			{
+				id: "context-codebase-investigator",
+				label: "codebase-investigator",
+				role: "investigator",
+				goal: "Identify relevant files, symbols, and existing implementation patterns for this topic.",
+				mode: "codebase",
+				deliverable: "Annotated map of existing code paths and pattern references.",
+			},
+			{
+				id: "context-constraints-analyst",
+				label: "constraints-analyst",
+				role: "analyst",
+				goal: "Identify architectural constraints, integration boundaries, and dependency risks.",
+				mode: "hybrid",
+				deliverable: "Constraint and risk matrix with explicit unknowns.",
+			},
+		];
+
+		if (options.includeInternet) {
+			tasks.push({
+				id: "context-external-researcher",
+				label: "external-researcher",
+				role: "researcher",
+				goal: "Identify relevant external standards, best practices, and common failure modes.",
+				mode: "internet",
+				deliverable: "External references and anti-pattern checklist relevant to this design.",
+			});
+		}
+
+		return tasks;
+	}
+
+	const tasks: Array<ResearchTask> = [
+		{
+			id: "brainstorm-critical-path-investigator",
+			label: "critical-path-investigator",
+			role: "investigator",
+			goal: "Identify performance-sensitive and complexity-critical areas that constrain design choices.",
+			mode: "codebase",
+			deliverable: "Critical path report with concrete hotspots and coupling points.",
+		},
+		{
+			id: "brainstorm-alternatives-analyst",
+			label: "alternatives-analyst",
+			role: "analyst",
+			goal: "Evaluate 2-3 viable architecture alternatives grounded in current codebase constraints.",
+			mode: "hybrid",
+			deliverable: "Trade-off matrix covering complexity, risk, and maintainability.",
+		},
+	];
+
+	if (options.includeInternet) {
+		tasks.push({
+			id: "brainstorm-industry-researcher",
+			label: "industry-researcher",
+			role: "researcher",
+			goal: "Find external benchmark patterns and practical lessons that can influence approach selection.",
+			mode: "internet",
+			deliverable: "Comparative benchmark notes with references and applicability caveats.",
+		});
+	}
+
+	return tasks;
+}
+
+function applyGoalsToRoleTasks(options: {
+	readonly tasks: ReadonlyArray<ResearchTask>;
+	readonly goals: ReadonlyArray<string>;
+}): ReadonlyArray<ResearchTask> {
+	if (options.goals.length === 0) return options.tasks;
+	if (options.tasks.length === 0) return [];
+
+	const withPrimaryGoals = options.tasks.map((task, index) => {
+		const assignedGoal = options.goals[index];
+		if (!assignedGoal) return task;
+		return {
+			...task,
+			goal: assignedGoal,
+		};
+	});
+
+	if (options.goals.length <= options.tasks.length) {
+		return withPrimaryGoals;
+	}
+
+	const overflowGoals = options.goals.slice(options.tasks.length);
+	const overflowTasks = overflowGoals.map((goal, overflowIndex) => {
+		const template = options.tasks[overflowIndex % options.tasks.length]!;
+		const ordinal = options.tasks.length + overflowIndex + 1;
+		const label = normalizeLabel(`${template.label}-${goalLabelFromText(goal, ordinal)}`, ordinal);
+		return {
+			id: `${template.id}-extra-${overflowIndex + 1}`,
+			label,
+			role: template.role,
+			goal,
+			mode: template.mode,
+			deliverable: template.deliverable,
+		};
+	});
+
+	return [...withPrimaryGoals, ...overflowTasks];
+}
+
+function buildCustomRoleTasks(roles: ReadonlyArray<{
+	readonly label: string;
+	readonly role: ResearchRole;
+	readonly goal: string;
+	readonly mode: ResearchMode;
+	readonly deliverable?: string;
+}>): ReadonlyArray<ResearchTask> {
+	return roles.map((role, index) => {
+		const label = normalizeLabel(role.label, index);
+		const goal = role.goal.trim();
+		const deliverable = role.deliverable?.trim();
+
+		return {
+			id: `${label}-${index + 1}`,
+			label,
+			role: role.role,
+			goal,
+			mode: role.mode,
+			deliverable: deliverable && deliverable.length > 0 ? deliverable : "Focused findings and recommendation.",
+		};
+	});
+}
+
+function buildResearchPrompt(options: {
+	readonly phase: ResearchPhase;
+	readonly topic: string;
+	readonly task: ResearchTask;
+}): string {
+	const modeHint =
+		options.task.mode === "codebase"
+			? "Prioritize codebase inspection (files, symbols, dependencies, interfaces)."
+			: options.task.mode === "internet"
+				? "Prioritize external standards/docs. If internet tools are unavailable, state that explicitly and continue with local evidence."
+				: "Use both codebase evidence and external references where relevant.";
+
+	return [
+		`You are ${options.task.label}, acting as a ${options.task.role} subagent in a coordinated research fanout.`,
+		`Phase: ${options.phase}`,
+		`Topic: ${options.topic}`,
+		`Assigned goal: ${options.task.goal}`,
+		`Expected deliverable: ${options.task.deliverable}`,
+		"",
+		"Subagent operating contract:",
+		"- Stay focused on your assigned goal; do not solve unrelated design decisions.",
+		"- Prefer concrete evidence over speculation.",
+		"- Include file paths and symbol names for codebase claims.",
+		"- Surface contradictions and unknowns clearly.",
+		"- End with a concise recommendation that another agent could consume.",
+		"",
+		modeHint,
+		"",
+		"Output format (exact headings):",
+		"## Agent Identity",
+		`- label: ${options.task.label}`,
+		`- role: ${options.task.role}`,
+		"",
+		"## Findings",
+		"- concise bullets",
+		"",
+		"## Evidence",
+		"- concrete file paths / symbols / references",
+		"",
+		"## Risks & Unknowns",
+		"- unresolved assumptions and data gaps",
+		"",
+		"## Recommendation",
+		"- practical guidance for design planning",
+		"",
+		"## Handoff",
+		"- what the next role should verify",
+	].join("\n");
+}
+
+function buildRoleSystemPrompt(task: ResearchTask): string {
+	const shared = [
+		"",
+		"## Quality contract",
+		"- Do not write files or modify the repository.",
+		"- Prefer concrete evidence over speculation.",
+		"- If evidence is missing, explicitly say what you searched and what was not found.",
+		"- Follow the exact heading structure requested by the user prompt.",
+	].join("\n");
+
+	if (task.role === "investigator") {
+		return [
+			"# Codebase Investigator",
+			"",
+			"You are a codebase investigator with expertise in understanding unfamiliar codebases through systematic exploration.",
+			"Your role is to perform deep dives into codebases to find accurate information that supports planning and design decisions.",
+			"",
+			"## Investigation workflow",
+			"1. Start with entry points — main files, index, package.json, config files.",
+			"2. Use multiple search strategies — glob patterns for file names, grep for keywords/symbols, read files for implementation details.",
+			"3. Follow traces — imports, references, component relationships. Don't stop at first result.",
+			"4. Verify don't assume — confirm file locations and structure exist before reporting them.",
+			"5. Report definitively — exact paths and line numbers, or 'not found' with search strategy documented.",
+			"",
+			"## Verifying assumptions",
+			"When the goal mentions design assumptions or expected behavior:",
+			"- Extract testable claims from the goal.",
+			"- Search for evidence of each claim.",
+			"- Report explicitly: ✓ Confirmed (with path:line), ✗ Discrepancy (expected vs actual), + Addition (found but not mentioned), - Missing (expected but not found).",
+			"",
+			"## Search strategies",
+			"- Use multiple approaches: glob for file patterns, grep for keywords/function names/imports, read key files.",
+			"- Don't stop at first result — explore multiple paths to verify findings.",
+			"- Cross-reference: confirm patterns are consistent, not one-off.",
+			"- Follow both usage and definition traces.",
+			"",
+			"## Reporting",
+			"- Lead with direct answer to the question.",
+			"- Provide exact file paths with line numbers (e.g., src/auth/login.ts:42).",
+			"- Include relevant code snippets showing current patterns.",
+			"- Note dependencies, versions, configuration when relevant.",
+			"- Handle 'not found' confidently — explain what you searched and where you looked.",
+			"- Distinguish 'doesn't exist' from 'couldn't locate'.",
+			"",
+			"## Common mistakes to avoid",
+			"- Assuming file locations without verifying with read/glob.",
+			"- Stopping at first result instead of exploring multiple paths.",
+			"- Reporting vague locations ('in auth folder') instead of exact paths.",
+			"- Not documenting search strategy when reporting 'not found'.",
+			"- Reporting assumptions as facts.",
+			shared,
+		].join("\n");
+	}
+
+	if (task.role === "researcher") {
+		return [
+			"# Internet Researcher",
+			"",
+			"You are an internet researcher with expertise in finding and synthesizing information from web sources.",
+			"Your role is to perform thorough research to answer questions that require external knowledge, current documentation, or community best practices.",
+			"",
+			"## Research workflow",
+			"1. Define the question clearly — specific beats vague.",
+			"2. Search official sources first — docs, release notes, changelogs, specs.",
+			"3. Cross-reference — verify claims across 2-3 sources minimum.",
+			"4. Evaluate source quality — tier sources by reliability.",
+			"5. Report concisely — lead with answer, provide links and evidence.",
+			"",
+			"## Source evaluation tiers",
+			"- Tier 1 (most reliable): Official docs, specifications, release notes, changelogs. Use as primary evidence.",
+			"- Tier 2 (generally reliable): Verified tutorials, maintained examples, reputable engineering blogs. Use as supporting evidence.",
+			"- Tier 3 (use with caution): Stack Overflow, forums, old tutorials. Check dates, cross-verify.",
+			"Always note source tier in findings.",
+			"",
+			"## Hypothesis testing",
+			"When testing whether something is true:",
+			"1. Break hypothesis into specific falsifiable claims.",
+			"2. Search for supporting evidence — what confirms this?",
+			"3. Search for disproving evidence — what contradicts this?",
+			"4. Weight evidence by source tier.",
+			"5. Report: supported/contradicted/inconclusive with evidence and confidence level.",
+			"",
+			"## Search strategies",
+			"- Use web_search for overview and current information.",
+			"- Use fetch_content for specific documentation pages, specs, and GitHub repos.",
+			"- Follow links from search results to authoritative sources.",
+			"- If first query doesn't yield results, refine the question and try alternative search terms.",
+			"- Don't give up after one attempt — be persistent.",
+			"- Search official documentation before community resources.",
+			"",
+			"## Reporting",
+			"- Lead with direct answer to the question.",
+			"- For external claims, cite concrete references: URLs, spec section numbers, version numbers.",
+			"- Include publication dates for time-sensitive topics.",
+			"- Note version numbers and compatibility requirements.",
+			"- Flag breaking changes or deprecations.",
+			"- Handle uncertainty clearly: 'no official documentation found for X' is valid.",
+			"- Distinguish 'doesn't exist' from 'couldn't find reliable information'.",
+			"",
+			"## Common mistakes to avoid",
+			"- Searching only one source instead of cross-referencing.",
+			"- Ignoring publication dates on time-sensitive information.",
+			"- Treating all sources equally instead of using tier system.",
+			"- Being overconfident based on a single source.",
+			"- Giving up after first failed search instead of refining the query.",
+			"- Skipping official docs and going straight to community content.",
+			shared,
+		].join("\n");
+	}
+
+	// analyst
+	return [
+		"# Technical Analyst",
+		"",
+		"You are a technical analyst synthesizing evidence into actionable design guidance.",
+		"Your role is to cross-check evidence from different sources, identify contradictions, and separate facts from assumptions.",
+		"",
+		"## Analysis workflow",
+		"1. Review all available evidence — codebase findings, external research, existing documentation.",
+		"2. Cross-check claims — do codebase findings match external best practices? Are there contradictions?",
+		"3. Identify gaps — what evidence is missing? What assumptions remain untested?",
+		"4. Assess risk — which unknowns could derail the design?",
+		"5. Synthesize — combine evidence into clear, actionable guidance.",
+		"",
+		"## Reporting",
+		"- Lead with the key insight or recommendation.",
+		"- Separate confirmed facts from assumptions.",
+		"- Call out contradictions explicitly with evidence from both sides.",
+		"- Rank risks by impact, not just likelihood.",
+		"- Provide concrete next steps, not vague suggestions.",
+		shared,
+	].join("\n");
+}
+
+function extractAssistantText(message: unknown): string {
+	if (!message || typeof message !== "object") return "";
+	const role = (message as { readonly role?: unknown }).role;
+	if (role !== "assistant") return "";
+	const content = (message as { readonly content?: unknown }).content;
+	if (!Array.isArray(content)) return "";
+	const parts = content
+		.filter((item): item is { readonly type: "text"; readonly text: string } => {
+			if (!item || typeof item !== "object") return false;
+			const type = (item as { readonly type?: unknown }).type;
+			const text = (item as { readonly text?: unknown }).text;
+			return type === "text" && typeof text === "string";
+		})
+		.map((item) => item.text);
+	return parts.join("\n").trim();
+}
+
+function firstSummaryLine(summary: string): string {
+	const lines = summary
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	if (lines.length === 0) return "no summary";
+
+	const firstMeaningful = lines.find((line) => !line.startsWith("##"));
+	if (!firstMeaningful) return lines[0];
+	return firstMeaningful.length > 120 ? `${firstMeaningful.slice(0, 120)}…` : firstMeaningful;
+}
+
+function formatDuration(durationMs: number | null): string {
+	if (durationMs === null || durationMs < 0) return "n/a";
+	if (durationMs < 1000) return `${durationMs}ms`;
+	const seconds = Math.round(durationMs / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remainingSeconds = seconds % 60;
+	return remainingSeconds === 0 ? `${minutes}m` : `${minutes}m ${remainingSeconds}s`;
+}
+
+function buildProgressText(details: ResearchDetails): string {
+	const modelSuffix = details.model ? ` • model ${details.model}` : "";
+	const lines: Array<string> = [
+		`Research fanout (${details.phase}) ${details.completed}/${details.launched} complete${modelSuffix}`,
+	];
+	for (const result of details.results) {
+		const statusIcon = result.status === "done" ? "✓" : result.status === "error" ? "✗" : "⏳";
+		const goal = ` — goal: ${goalPreview(result.goal, 64)}`;
+		const suffix =
+			result.status === "error"
+				? ` — ${result.error ?? "failed"}`
+				: result.status === "done"
+					? ` — ${firstSummaryLine(result.summary)}`
+					: "";
+		lines.push(`${statusIcon} ${result.label} (${result.role})${goal}${suffix}`);
+	}
+	return lines.join("\n");
+}
+
+function buildSynthesisPrompt(details: ResearchDetails): string {
+	const serializedResults = details.results
+		.map((result, index) => {
+			const body =
+				result.status === "error"
+					? `Error: ${result.error ?? "failed"}`
+					: result.summary || "No summary returned";
+			return [
+				`### Result ${index + 1}: ${result.label} (${result.role}) [${result.status}]`,
+				`- goal: ${result.goal}`,
+				`- mode: ${result.mode}`,
+				`- model: ${result.model ?? "default"}`,
+				"",
+				body,
+			].join("\n");
+		})
+		.join("\n\n");
+
+	return [
+		"Synthesize these research-agent outputs into a decision-ready digest for design planning.",
+		"Use only the evidence provided. Do not invent facts.",
+		"",
+		`Phase: ${details.phase}`,
+		`Topic: ${details.topic}`,
+		"",
+		"Return exactly these markdown sections:",
+		"## Cross-Agent Synthesis",
+		"- 3-6 bullets combining evidence across roles (not per-role repetition)",
+		"- include concrete evidence references where available (file paths/symbols/URLs)",
+		"",
+		"## Top Risks",
+		"- exactly 3 bullets with why each risk matters now",
+		"",
+		"## Recommended Direction",
+		"- Primary recommendation",
+		"- Why this is best now",
+		"- Confidence: high|medium|low",
+		"- Trade-offs (2-4 bullets)",
+		"",
+		"## What to Measure Next",
+		"- 4-8 concrete checks/metrics/instrumentation steps",
+		"",
+		"If evidence is insufficient, say so explicitly in the relevant section.",
+		"",
+		"Research outputs:",
+		serializedResults,
+	].join("\n");
+}
+
+function toErrorMessage(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	return String(error);
+}
+
+async function runResearchTask(options: {
+	readonly phase: ResearchPhase;
+	readonly topic: string;
+	readonly task: ResearchTask;
+	readonly cwd: string;
+	readonly model: string | null;
+	readonly signal?: AbortSignal;
+}): Promise<ResearchTaskResult> {
+	const prompt = buildResearchPrompt({
+		phase: options.phase,
+		topic: options.topic,
+		task: options.task,
+	});
+
+	const startedAt = new Date().toISOString();
+
+	return await new Promise<ResearchTaskResult>((resolve) => {
+		const args = [
+			"--mode",
+			"json",
+			"-p",
+			"--no-session",
+			"--tools",
+			"read,bash,grep,find,ls",
+			"--append-system-prompt",
+			buildRoleSystemPrompt(options.task),
+		];
+		if (options.model) {
+			args.push("--model", options.model);
+		}
+		args.push(prompt);
+		const proc = spawn("pi", args, {
+			cwd: options.cwd,
+			shell: false,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+
+		let stdoutBuffer = "";
+		let stderrBuffer = "";
+		let latestAssistant = "";
+		let aborted = false;
+		let settled = false;
+
+		const abortHandler = (): void => {
+			aborted = true;
+			proc.kill("SIGTERM");
+			setTimeout(() => {
+				if (!proc.killed) {
+					proc.kill("SIGKILL");
+				}
+			}, 2000);
+		};
+
+		const settle = (result: {
+			readonly status: "done" | "error";
+			readonly summary: string;
+			readonly error?: string;
+		}): void => {
+			if (settled) return;
+			settled = true;
+			if (options.signal) {
+				options.signal.removeEventListener("abort", abortHandler);
+			}
+			const finishedAt = new Date().toISOString();
+			resolve({
+				id: options.task.id,
+				label: options.task.label,
+				role: options.task.role,
+				goal: options.task.goal,
+				mode: options.task.mode,
+				deliverable: options.task.deliverable,
+				status: result.status,
+				summary: result.summary,
+				startedAt,
+				finishedAt,
+				durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+				model: options.model,
+				error: result.error,
+			});
+		};
+
+		if (options.signal) {
+			if (options.signal.aborted) {
+				abortHandler();
+			} else {
+				options.signal.addEventListener("abort", abortHandler, { once: true });
+			}
+		}
+
+		const processLine = (line: string): void => {
+			const trimmed = line.trim();
+			if (!trimmed) return;
+			let payload: unknown;
+			try {
+				payload = JSON.parse(trimmed);
+			} catch {
+				return;
+			}
+			const type = (payload as { readonly type?: unknown }).type;
+			if (type !== "message_end") return;
+			const message = (payload as { readonly message?: unknown }).message;
+			const assistantText = extractAssistantText(message);
+			if (assistantText) {
+				latestAssistant = assistantText;
+			}
+		};
+
+		proc.stdout.on("data", (chunk) => {
+			stdoutBuffer += chunk.toString();
+			const lines = stdoutBuffer.split("\n");
+			stdoutBuffer = lines.pop() ?? "";
+			for (const line of lines) {
+				processLine(line);
+			}
+		});
+
+		proc.stderr.on("data", (chunk) => {
+			stderrBuffer += chunk.toString();
+		});
+
+		proc.on("close", (code) => {
+			if (stdoutBuffer.trim().length > 0) {
+				processLine(stdoutBuffer);
+			}
+
+			if (aborted) {
+				settle({
+					status: "error",
+					summary: latestAssistant,
+					error: "aborted",
+				});
+				return;
+			}
+
+			if ((code ?? 1) !== 0) {
+				settle({
+					status: "error",
+					summary: latestAssistant,
+					error: stderrBuffer.trim() || `process exited with code ${code ?? 1}`,
+				});
+				return;
+			}
+
+			settle({
+				status: "done",
+				summary: latestAssistant,
+			});
+		});
+
+		proc.on("error", (error) => {
+			settle({
+				status: "error",
+				summary: latestAssistant,
+				error: error.message,
+			});
+		});
+	});
+}
+
+const SYNTHESIS_REQUIRED_HEADINGS = [
+	"## Cross-Agent Synthesis",
+	"## Top Risks",
+	"## Recommended Direction",
+	"## What to Measure Next",
+] as const;
+
+async function resolveSynthesisModel(options: {
+	readonly ctx: ExtensionContext;
+	readonly selectedModel: string | null;
+}): Promise<{ readonly model: Model<Api>; readonly apiKey: string } | null> {
+	const available = options.ctx.modelRegistry.getAvailable();
+	const preferredProvider = options.ctx.model?.provider ?? null;
+
+	const candidates: Array<Model<Api>> = [];
+	if (options.selectedModel) {
+		const byId = available.filter((model) => model.id === options.selectedModel);
+		const ordered = [...byId].sort((left, right) => {
+			const leftPreferred = preferredProvider !== null && left.provider === preferredProvider ? 1 : 0;
+			const rightPreferred = preferredProvider !== null && right.provider === preferredProvider ? 1 : 0;
+			return rightPreferred - leftPreferred;
+		});
+		candidates.push(...ordered);
+	}
+
+	if (options.ctx.model) {
+		candidates.push(options.ctx.model);
+	}
+
+	for (const model of available) {
+		if (candidates.some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) {
+			continue;
+		}
+		candidates.push(model);
+	}
+
+	for (const candidate of candidates) {
+		const apiKey = await options.ctx.modelRegistry.getApiKey(candidate);
+		if (!apiKey) continue;
+		return { model: candidate, apiKey };
+	}
+
+	return null;
+}
+
+function isValidSynthesisShape(text: string): boolean {
+	return SYNTHESIS_REQUIRED_HEADINGS.every((heading) => text.includes(heading));
+}
+
+async function runSynthesisWithLlm(options: {
+	readonly ctx: ExtensionContext;
+	readonly details: ResearchDetails;
+	readonly selectedModel: string | null;
+}): Promise<string> {
+	const selection = await resolveSynthesisModel({
+		ctx: options.ctx,
+		selectedModel: options.selectedModel,
+	});
+	if (!selection) {
+		throw new Error("no model/api key available for synthesis");
+	}
+
+	const userMessage: UserMessage = {
+		role: "user",
+		content: [{ type: "text", text: buildSynthesisPrompt(options.details) }],
+		timestamp: Date.now(),
+	};
+
+	const response = await complete(
+		selection.model,
+		{ messages: [userMessage] },
+		{ apiKey: selection.apiKey },
+	);
+
+	if (response.stopReason === "aborted" || response.stopReason === "error") {
+		throw new Error(`synthesis model stopped: ${response.stopReason}`);
+	}
+
+	const synthesis = response.content
+		.filter((item): item is { readonly type: "text"; readonly text: string } => item.type === "text")
+		.map((item) => item.text)
+		.join("\n")
+		.trim();
+
+	if (!synthesis) {
+		throw new Error("no synthesis output returned");
+	}
+	if (!isValidSynthesisShape(synthesis)) {
+		throw new Error("synthesis output missing required headings");
+	}
+	return synthesis;
+}
+
+async function runWithConcurrency<TInput, TResult>(options: {
+	readonly items: ReadonlyArray<TInput>;
+	readonly concurrency: number;
+	readonly worker: (item: TInput, index: number) => Promise<TResult>;
+}): Promise<Array<TResult>> {
+	if (options.items.length === 0) return [];
+	const results: Array<TResult> = new Array<TResult>(options.items.length);
+	const concurrency = Math.max(1, Math.min(options.concurrency, options.items.length));
+	let cursor = 0;
+
+	const workers = Array.from({ length: concurrency }).map(async () => {
+		while (true) {
+			const index = cursor;
+			cursor += 1;
+			if (index >= options.items.length) return;
+			results[index] = await options.worker(options.items[index], index);
+		}
+	});
+
+	await Promise.all(workers);
+	return results;
+}
+
+function renderFinalSummary(options: {
+	readonly details: ResearchDetails;
+	readonly synthesis: string;
+}): string {
+	const header = `Research fanout complete (${options.details.completed}/${options.details.launched})`;
+	const modelLine = options.details.model ? `Model: ${options.details.model}` : null;
+	const sections = options.details.results.map((result) => {
+		const title = `### ${result.label} (${result.role}) [${result.status}]`;
+		const metadata = [
+			`- goal: ${result.goal}`,
+			`- mode: ${result.mode}`,
+			`- model: ${result.model ?? "default"}`,
+			`- deliverable: ${result.deliverable}`,
+			`- duration: ${formatDuration(result.durationMs)}`,
+		].join("\n");
+		if (result.status === "error") {
+			return `${title}\n${metadata}\n\n${result.error ?? "Task failed"}`;
+		}
+		return `${title}\n${metadata}\n\n${result.summary || "No summary returned"}`;
+	});
+	return [header, modelLine, options.synthesis, ...sections]
+		.filter((part): part is string => Boolean(part))
+		.join("\n\n");
+}
+
+export function registerDesignResearchFanoutTool(pi: ExtensionAPI, binding: ResearchFanoutBinding): void {
+	pi.registerTool({
+		name: "design_research_fanout",
+		label: "Design Research Fanout",
+		description:
+			"Launches role-based subagent fanout for /start-design-plan phases. Applies /design-plan-config defaults unless call params override them.",
+		parameters: RESEARCH_PARAMS,
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const topic = params.topic.trim();
+			if (!topic) {
+				return {
+					content: [{ type: "text", text: "Error: topic is required" }],
+					isError: true,
+				};
+			}
+
+			const phase = params.phase as ResearchPhase;
+			const config = binding.getConfig();
+			const includeInternet =
+				params.includeInternet === undefined ? config.researchIncludeInternet : params.includeInternet !== false;
+			const maxAgents = Math.max(1, Math.min(4, Math.floor(params.maxAgents ?? config.researchMaxAgents)));
+			const selectedModel = params.model?.trim() ? params.model.trim() : config.researchModel;
+			const goalList = (params.goals ?? [])
+				.map((goal) => goal.trim())
+				.filter((goal) => goal.length > 0);
+			const customRoles = (params.roles ?? []).filter((role) => role.goal.trim().length > 0);
+
+			const tasks =
+				customRoles.length > 0
+					? buildCustomRoleTasks(customRoles)
+					: applyGoalsToRoleTasks({
+							tasks: buildDefaultTasks({ phase, includeInternet }),
+							goals: goalList,
+						});
+
+			if (tasks.length === 0) {
+				return {
+					content: [{ type: "text", text: "No research tasks to run" }],
+					details: {
+						phase,
+						topic,
+						model: selectedModel,
+						launched: 0,
+						completed: 0,
+						results: [],
+					} as ResearchDetails,
+				};
+			}
+
+			const cwd = params.cwd?.trim() || ctx.cwd;
+			const runningResults: Array<ResearchTaskResult> = tasks.map((task) => ({
+				id: task.id,
+				label: task.label,
+				role: task.role,
+				goal: task.goal,
+				mode: task.mode,
+				deliverable: task.deliverable,
+				status: "running",
+				summary: "",
+				startedAt: new Date().toISOString(),
+				finishedAt: null,
+				durationMs: null,
+				model: selectedModel,
+			}));
+
+			const emitProgress = (): void => {
+				if (!onUpdate) return;
+				const completed = runningResults.filter((result) => result.status !== "running").length;
+				const details: ResearchDetails = {
+					phase,
+					topic,
+					model: selectedModel,
+					launched: runningResults.length,
+					completed,
+					results: [...runningResults],
+				};
+				onUpdate({
+					content: [{ type: "text", text: buildProgressText(details) }],
+					details,
+				});
+			};
+
+			emitProgress();
+
+			const results = await runWithConcurrency({
+				items: tasks,
+				concurrency: maxAgents,
+				worker: async (task, index) => {
+					const result = await runResearchTask({
+						phase,
+						topic,
+						task,
+						cwd,
+						model: selectedModel,
+						signal,
+					});
+					runningResults[index] = result;
+					emitProgress();
+					return result;
+				},
+			});
+
+			const completed = results.filter((result) => result.status !== "running").length;
+			const errorCount = results.filter((result) => result.status === "error").length;
+			const details: ResearchDetails = {
+				phase,
+				topic,
+				model: selectedModel,
+				launched: results.length,
+				completed,
+				results,
+			};
+
+			let synthesis: string;
+			try {
+				synthesis = await runSynthesisWithLlm({
+					ctx,
+					details,
+					selectedModel,
+				});
+			} catch (error) {
+				return {
+					content: [{ type: "text", text: `Error: synthesis failed: ${toErrorMessage(error)}` }],
+					details,
+					isError: true,
+				};
+			}
+
+			const summary = renderFinalSummary({ details, synthesis });
+			return {
+				content: [{ type: "text", text: summary }],
+				details,
+				isError: errorCount === results.length,
+			};
+		},
+		renderCall(args, theme) {
+			const phase = typeof args.phase === "string" ? args.phase : "context";
+			const roleCount = Array.isArray(args.roles) ? args.roles.length : 0;
+			const goals = Array.isArray(args.goals) ? args.goals.length : 0;
+			const selectedModel = typeof args.model === "string" && args.model.trim().length > 0 ? args.model.trim() : null;
+			const mode = roleCount > 0 ? `${roleCount} explicit roles` : goals > 0 ? `${goals} custom goals` : "default roles";
+			const header =
+				theme.fg("toolTitle", theme.bold("design_research_fanout ")) +
+				theme.fg("accent", `${phase}`) +
+				theme.fg("muted", ` • ${mode}`) +
+				(selectedModel ? theme.fg("dim", ` • model ${selectedModel}`) : "");
+
+			const previews: Array<string> = [];
+			if (Array.isArray(args.goals)) {
+				for (const goal of args.goals.slice(0, 3)) {
+					if (typeof goal !== "string") continue;
+					const trimmed = goal.trim();
+					if (!trimmed) continue;
+					previews.push(theme.fg("dim", `- ${goalPreview(trimmed, 76)}`));
+				}
+			}
+			if (previews.length === 0 && Array.isArray(args.roles)) {
+				for (const role of args.roles.slice(0, 3)) {
+					if (!role || typeof role !== "object") continue;
+					const label = typeof role.label === "string" ? role.label.trim() : "role";
+					const goal = typeof role.goal === "string" ? role.goal.trim() : "";
+					if (!goal) continue;
+					previews.push(theme.fg("dim", `- ${label}: ${goalPreview(goal, 68)}`));
+				}
+			}
+
+			if (previews.length === 0) {
+				return new Text(header, 0, 0);
+			}
+			return new Text(`${header}\n${previews.join("\n")}`, 0, 0);
+		},
+		renderResult(result, { expanded }, theme) {
+			const details = result.details as ResearchDetails | undefined;
+			if (!details) {
+				const first = result.content[0];
+				return new Text(first?.type === "text" ? first.text : "", 0, 0);
+			}
+
+			const done = details.results.filter((item) => item.status === "done").length;
+			const failed = details.results.filter((item) => item.status === "error").length;
+			const running = details.results.filter((item) => item.status === "running").length;
+			const modelSuffix = details.model ? theme.fg("dim", ` • model ${details.model}`) : "";
+			const header =
+				theme.fg("success", `✓ ${done}`) +
+				theme.fg("muted", ` done`) +
+				(failed > 0 ? ` ${theme.fg("warning", `• ${failed} failed`)}` : "") +
+				(running > 0 ? ` ${theme.fg("warning", `• ${running} running`)}` : "") +
+				theme.fg("dim", ` • phase ${details.phase}`) +
+				modelSuffix;
+
+			if (!expanded) {
+				const rolePreviewLines = details.results.slice(0, 3).map((item) => {
+					const icon = item.status === "done" ? "✓" : item.status === "error" ? "✗" : "⏳";
+					const preview =
+						item.status === "done"
+							? firstSummaryLine(item.summary)
+							: item.status === "error"
+								? item.error ?? "failed"
+								: `goal: ${goalPreview(item.goal, 44)}`;
+					return `${icon} ${item.label}: ${goalPreview(preview, 70)}`;
+				});
+				const suffix =
+					details.results.length > 3
+						? theme.fg("dim", `+${details.results.length - 3} more research tasks`)
+						: "";
+				const body = rolePreviewLines.length > 0 ? theme.fg("muted", rolePreviewLines.join("\n")) : theme.fg("muted", "(no tasks)");
+				return new Text(suffix ? `${header}\n${body}\n${suffix}` : `${header}\n${body}`, 0, 0);
+			}
+
+			const lines = [header];
+			for (const item of details.results) {
+				const icon = item.status === "done" ? "✓" : item.status === "error" ? "✗" : "⏳";
+				const detailLine =
+					item.status === "error"
+						? item.error ?? "failed"
+						: item.status === "running"
+							? "running"
+							: firstSummaryLine(item.summary);
+				lines.push(
+					`${icon} ${item.label} (${item.role}) • ${item.mode} • ${formatDuration(item.durationMs)} — ${detailLine}\n  goal: ${goalPreview(item.goal, 88)}`,
+				);
+			}
+			return new Text(lines.join("\n"), 0, 0);
+		},
+	});
+}

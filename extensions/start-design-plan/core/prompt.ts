@@ -15,6 +15,7 @@ Follow this five-phase process exactly:
 
 Use ask_user_question when presenting discrete options.
 Use design_plan_tracker to create and update phase progress.
+Use design_research_fanout before clarification and during brainstorming research checkpoints.
 
 Do not skip phases.
 Create docs/design-plans/YYYY-MM-DD-<slug>.md immediately after Definition of Done is confirmed.
@@ -56,10 +57,15 @@ export async function buildKickoffPrompt(options: {
 		"Execution requirements:",
 		"- The tracker is already initialized by /start-design-plan. Call design_plan_tracker action=get first.",
 		"- Update phase status and notes through every phase.",
-		"- Use ask_user_question for structured choices.",
+		"- Run role-based design_research_fanout before clarification questions and before proposing brainstorm approaches.",
+		"- design_research_fanout applies /design-plan-config defaults unless explicitly overridden.",
+		"- Track research/exploration tasks with design_plan_tracker add_task/set_task_status/append_task_note/list_tasks.",
+		"- Use blockedBy dependencies for tasks that cannot start yet.",
+		"- For any discrete decision with 2+ options, use ask_user_question (do not inline option menus in assistant text).",
+		"- Before architecture-choice questions, present a brief Research Digest (findings + risks + evidence paths).",
 		"- Do not skip phases.",
 		"- Create the design file in docs/design-plans once Definition of Done is confirmed.",
-		"- End by reporting only that design is complete and the final design path.",
+		"- Completion response must be exactly two lines: 'Design planning is complete.' and 'Design path: <exact path>'.",
 		"",
 		"Workflow instructions:",
 		workflow,
@@ -89,8 +95,14 @@ export async function buildResumePrompt(options: {
 		"- Do not reset or recreate tracker state.",
 		"- Call design_plan_tracker action=get first, then continue from the current phase.",
 		"- Keep phase status transitions and notes current.",
-		"- Use ask_user_question for discrete decisions.",
+		"- Run role-based design_research_fanout at the same checkpoints as a fresh run (before clarification and brainstorming exploration).",
+		"- design_research_fanout applies /design-plan-config defaults unless explicitly overridden.",
+		"- Continue task graph tracking with add_task/set_task_status/append_task_note/list_tasks.",
+		"- Use blockedBy dependencies for research/exploration sequencing.",
+		"- For any discrete decision with 2+ options, use ask_user_question (do not inline option menus in assistant text).",
+		"- Before architecture-choice questions, present a brief Research Digest (findings + risks + evidence paths).",
 		"- Continue until design-plan workflow reaches completion (after design documentation).",
+		"- Completion response must be exactly two lines: 'Design planning is complete.' and 'Design path: <exact path>'.",
 		"",
 		"Workflow instructions:",
 		workflow,

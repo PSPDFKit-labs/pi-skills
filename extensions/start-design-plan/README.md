@@ -11,8 +11,11 @@ License for this extension is in `LICENSE` (CC BY-SA 4.0).
 
 - `/start-design-plan` command
 - `ask_user_question` tool for structured choices
+- `design_research_fanout` tool for parallel, phase-gated research runs
 - `design_plan_tracker` tool for five-phase status tracking
 - Progress widget + status line
+- Strict guardrail mode for discrete decisions and completion response shape
+- Research Digest requirement before architecture-direction questions
 - Workflow contract in `assets/workflow.md`
 
 ## Tools
@@ -27,6 +30,23 @@ Parameters:
 - `allowOther?`: boolean (defaults to `true`)
 - `otherLabel?`: string
 
+### `design_research_fanout`
+
+Role-based subagent fanout used before clarification and during brainstorming.
+
+Default role packs:
+- `context`: `codebase-investigator`, `constraints-analyst`, `external-researcher`
+- `brainstorm`: `critical-path-investigator`, `alternatives-analyst`, `industry-researcher`
+
+Parameters:
+- `phase`: `context` | `brainstorm`
+- `topic`: string
+- `goals?`: string[] (custom goals mapped onto the phase role pack; preserves investigator/analyst/researcher specialization)
+- `roles?`: explicit role assignments (`label`, `role`, `goal`, `mode`, `deliverable?`)
+- `includeInternet?`: boolean (optional override of `/design-plan-config`)
+- `maxAgents?`: number (1-4, optional override of `/design-plan-config`)
+- `model?`: string (optional override of `/design-plan-config`)
+
 ### `design_plan_tracker`
 
 State tracker for workflow phases.
@@ -37,6 +57,10 @@ Actions:
 - `set_status`
 - `append_note`
 - `set_design_path`
+- `add_task`
+- `set_task_status`
+- `append_task_note`
+- `list_tasks`
 - `reset`
 
 ## Commands
@@ -52,3 +76,28 @@ If no topic is supplied, the command prompts for one.
 Resumes an in-progress design workflow from the stored tracker state.
 
 Optional guidance is passed through as additional instruction for the resumed run.
+
+### `/design-plan-config [status|reset|model <id|default>|max-agents <1-4>|include-internet <on|off>]`
+
+Configures default behavior for research fanout tool calls made during the design workflow.
+
+Configuration is persisted globally at `~/.pi/agent/design-plan-config.json` (or `$PI_CODING_AGENT_DIR/design-plan-config.json` if set).
+
+- With no arguments (interactive UI mode), opens a config menu with a model selector.
+- With arguments, supports scriptable text commands.
+
+Defaults:
+- `model=default`
+- `maxAgents=3`
+- `includeInternet=on`
+
+These defaults are automatically applied when the assistant calls `design_research_fanout` without explicit overrides.
+
+### `/design-plan-guardrails [strict|relaxed|status]`
+
+Controls guardrail behavior:
+- `strict` (default):
+  - enforces `ask_user_question` for discrete 2+ option decisions
+  - enforces final completion response shape (`Design planning is complete.` + `Design path: ...`)
+- `relaxed`: prompt guidance only
+- `status`: show current mode
