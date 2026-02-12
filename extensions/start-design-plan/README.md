@@ -81,6 +81,8 @@ Optional guidance is passed through as additional instruction for the resumed ru
 
 Configures default behavior for research fanout tool calls made during the design workflow.
 
+Configuration is persisted per project at `.pi/design-plan-config.json`.
+
 - With no arguments (interactive UI mode), opens a config menu with a model selector.
 - With arguments, supports scriptable text commands.
 
