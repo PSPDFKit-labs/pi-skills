@@ -11,6 +11,7 @@ Shared pi skills and extensions used by the team. Add this repo as a local packa
 - `buildkite-playwright-failures` — extract failed-only Playwright tests from Buildkite logs.
 - `gh-address-comments` — fetch PR review comments, apply fixes with build verification, and commit each fix atomically. *(Derived from [skills.sh](https://skills.sh/openai/skills/gh-address-comments), Apache 2.0)*
 - `github` — use the `gh` CLI for issues, PRs, and runs.
+- `github-repo-search` — search any repo via `gh search` and deep-read files via the GitHub API without cloning.
 - `multi-review` — multi-model PR review workflow.
 - `tmux` — drive tmux sessions for interactive tools.
 
