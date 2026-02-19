@@ -1,17 +1,17 @@
 ---
 name: multi-review
-description: Multi-model code review. Runs code-review skill with 2 models in parallel, then synthesizes findings.
+description: Multi-model code review. Runs 2 sub-agent reviews in parallel, then synthesizes findings with active validation.
 ---
 
 # Multi Review
 
-Runs the `code-review` skill with 2 different models in parallel, then synthesizes with **active validation**.
+Runs 2 sub-agent reviews with different models in parallel, then synthesizes with **active validation**.
 
 ## Process
 
 ### Phase 1: Gather Reviews
 
-1. **Create a unique temp dir + get the PR diff** (same as code-review)
+1. **Create a unique temp dir + get the PR diff**
    ```bash
    # Unique temp dir for this run
    TMP_DIR="$(mktemp -d -t multi-review.XXXXXX)"
@@ -22,11 +22,11 @@ Runs the `code-review` skill with 2 different models in parallel, then synthesiz
    ```
 
 2. **Run 2 parallel reviews via bash**
-   ```bash
-   pi -p --model claude-opus-4-6 "Read and follow ~/dev/pi-skills/code-review/SKILL.md to review the PR. Diff is at $PR_DIFF" > "$TMP_DIR/review-opus.md" &
-   pi -p --model gpt-5.3-codex --provider openai-codex "Read and follow ~/dev/pi-skills/code-review/SKILL.md to review the PR. Diff is at $PR_DIFF" > "$TMP_DIR/review-codex.md" &
-   wait
-   ```
+
+   Use your agent CLI to spawn two sub-agents with different models. The review prompt for each:
+   > "Review the PR diff at `$PR_DIFF` thoroughly. Look for bugs, security issues, performance problems, incorrect logic, and code quality issues. Output a detailed markdown report of your findings."
+
+   Run them in parallel and write each result to a separate file, e.g. `$TMP_DIR/review-model-a.md` and `$TMP_DIR/review-model-b.md`, then `wait` for both to finish.
 
 ### Phase 2: Active Validation (IMPORTANT)
 
@@ -104,7 +104,7 @@ Runs the `code-review` skill with 2 different models in parallel, then synthesiz
 Each issue should include:
 - **File**: path/to/file.ext#L10-L15
 - **Status**: ✅ Confirmed | ⚠️ Needs verification | ❌ False positive
-- **Found by**: Opus / Codex / PR feedback
+- **Found by**: Model A / Model B / PR feedback
 - **Description**: What's wrong and why it matters
 - **Suggestion**: How to fix (if applicable)
 
@@ -115,8 +115,8 @@ Each issue should include:
 [Things all models may have missed - especially check PR description claims]
 
 ## 📊 Model Coverage
-| Issue | Opus | Codex | PR | Status |
-|-------|:----:|:-----:|:--:|--------|
+| Issue | Model A | Model B | PR | Status |
+|-------|:-------:|:-------:|:--:|--------|
 | Issue 1 | ✅ | ✅ | - | ✅ Confirmed |
 | Issue 2 | ❌ | ✅ | - | ✅ Confirmed |
 | Issue 3 | ✅ | ❌ | - | ❌ False positive |

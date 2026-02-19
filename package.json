@@ -1,13 +1,13 @@
 {
   "name": "pi-skills",
   "version": "0.1.0",
-  "description": "Shared pi skills and extensions for the team.",
+  "description": "A shared collection of skills and extensions for AI coding agents.",
   "private": true,
   "type": "module",
   "keywords": [
-    "pi-package",
-    "pi-extension",
-    "pi-skill"
+    "ai-skill",
+    "claude-code",
+    "pi-package"
   ],
   "pi": {
     "extensions": ["./extensions"],

@@ -1,58 +1,109 @@
-# pi skills (shared)
+# skills
 
-Shared pi skills and extensions used by the team. Add this repo as a local package in pi to load them.
+A shared collection of skills and extensions for AI coding agents.
 
 ## What's included
 
 ### Skills
 
-- `buildkite-cli` — use the local `bkci` CLI for LLM-friendly Buildkite JSON (builds, logs, artifacts, auth scopes).
-- `buildkite-mcp` *(deprecated)* — legacy mcporter/mcp-remote Buildkite access kept for compatibility.
-- `buildkite-playwright-failures` — extract failed-only Playwright tests from Buildkite logs.
-- `gh-address-comments` — fetch PR review comments, apply fixes with build verification, and commit each fix atomically. *(Derived from [skills.sh](https://skills.sh/openai/skills/gh-address-comments), Apache 2.0)*
-- `github` — use the `gh` CLI for issues, PRs, and runs.
-- `github-repo-search` — search any repo via `gh search` and deep-read files via the GitHub API without cloning.
-- `multi-review` — multi-model PR review workflow.
-- `tmux` — drive tmux sessions for interactive tools.
+Skills are agent-agnostic markdown instructions compatible with any AI coding agent that supports loading markdown context. See [Setup](#setup) for how to wire them up.
+
+- [`buildkite-cli`](skills/buildkite-cli/) — use the local `bkci` CLI for LLM-friendly Buildkite JSON (builds, logs, artifacts, auth scopes).
+- [`buildkite-mcp`](skills/buildkite-mcp/) *(deprecated)* — legacy mcporter/mcp-remote Buildkite access kept for compatibility.
+- [`buildkite-playwright-failures`](skills/buildkite-playwright-failures/) — extract failed-only Playwright tests from Buildkite logs.
+- [`gh-address-comments`](skills/gh-address-comments/) — fetch PR review comments, apply fixes with build verification, and commit each fix atomically. *(Derived from [skills.sh](https://skills.sh/openai/skills/gh-address-comments), Apache 2.0)*
+- [`github`](skills/github/) — use the `gh` CLI for issues, PRs, and runs.
+- [`github-repo-search`](skills/github-repo-search/) — search any repo via `gh search` and deep-read files via the GitHub API without cloning.
+- [`multi-review`](skills/multi-review/) — multi-model PR review workflow.
+- [`tmux`](skills/tmux/) — drive tmux sessions for interactive tools.
 
 ### Extensions
 
-- `buildkite-failures` — `/bk-playwright-errors <url>` shows a selectable list of failing Playwright tests and opens the Buildkite job in a browser.
-- `cronjob` — `/cron` command for scheduled prompts (cron expressions), optional job names, and queued runs while busy.
-- `loop` — `/loop` command that keeps a follow-up loop running until a breakout condition is met.
-- `notify` — desktop notification when the agent finishes and waits for input.
-- `start-design-plan` — Claude-style design workflow extension with `/start-design-plan` and `/resume-design-plan`, plus `ask_user_question` and `design_plan_tracker` tools. Ported from concepts in `ed3d-plan-and-execute` (`https://github.com/ed3dai/ed3d-plugins`). Extension-specific license in `extensions/start-design-plan/LICENSE`.
-- `pi-skills-update-checker` — checks for new commits on startup and shows a widget when updates are available.
+Extensions are TypeScript plugins that run inside **pi** only and are not compatible with other agents.
 
-## Usage
+- [`buildkite-failures`](extensions/buildkite-failures.ts) — `/bk-playwright-errors <url>` shows a selectable list of failing Playwright tests and opens the Buildkite job in a browser.
+- [`cronjob`](extensions/cronjob.ts) — `/cron` command for scheduled prompts (cron expressions), optional job names, and queued runs while busy.
+- [`loop`](extensions/loop.ts) — `/loop` command that keeps a follow-up loop running until a breakout condition is met.
+- [`notify`](extensions/notify.ts) — desktop notification when the agent finishes and waits for input.
+- [`start-design-plan`](extensions/start-design-plan/) — Claude-style design workflow with `/start-design-plan` and `/resume-design-plan`, plus `ask_user_question` and `design_plan_tracker` tools. Ported from concepts in `ed3d-plan-and-execute` (`https://github.com/ed3dai/ed3d-plugins`). Extension-specific license in `extensions/start-design-plan/LICENSE`.
+- [`pi-skills-update-checker`](extensions/pi-skills-update-checker.ts) — checks for new commits on startup and shows a widget when updates are available.
 
-Install as a project-local package (writes `.pi/settings.json`):
+## Setup
 
-```bash
-pi install -l /absolute/path/to/pi-skills-nutrient
-```
-
-Install directly from GitHub:
+### 1. Clone the repo
 
 ```bash
-pi install -l https://github.com/PSPDFKit-labs/pi-skills
+git clone https://github.com/PSPDFKit-labs/pi-skills ~/dev/skills
 ```
 
-Or add it manually:
+Keep it somewhere stable — your symlinks and references will point here. Pull to update:
 
-```json
-{
-  "packages": [
-    "/path/to/pi-skills-nutrient"
-  ]
-}
+```bash
+cd ~/dev/skills && git pull
+```
+
+### 2. Wire up your agent
+
+Each `SKILL.md` is a standalone markdown file. How you expose it depends on your agent:
+
+#### Slash commands — Claude Code, Cursor, Windsurf
+
+Agents that support custom slash commands load them from a directory of markdown files. Symlink individual skills there so updates are picked up automatically:
+
+```bash
+# Claude Code
+mkdir -p .claude/commands
+ln -s ~/dev/skills/skills/github/SKILL.md .claude/commands/github.md
+ln -s ~/dev/skills/skills/multi-review/SKILL.md .claude/commands/multi-review.md
+
+# Cursor / Windsurf (adjust path to match your agent)
+mkdir -p .cursor/rules
+ln -s ~/dev/skills/skills/github/SKILL.md .cursor/rules/github.md
+```
+
+#### Skills directory — Codex and others
+
+Agents that scan a skills directory (e.g. Codex reads `.agents/skills/`) can use a single symlink for all skills:
+
+```bash
+# Codex
+ln -s ~/dev/skills/skills .agents/skills
+
+# Claude Code also supports a skills folder
+ln -s ~/dev/skills/skills .claude/skills
+```
+
+#### Context / memory files — Claude Code
+
+Claude Code supports `@path` imports in `CLAUDE.md` to pull in skill content at startup:
+
+```markdown
+<!-- in CLAUDE.md -->
+@~/dev/skills/skills/github/SKILL.md
+@~/dev/skills/skills/multi-review/SKILL.md
+```
+
+For other agents (e.g. Codex's `AGENTS.md`), paste the skill content directly or use the skills directory approach above.
+
+#### Direct prompt reference
+
+For one-off use, just tell your agent where to find the skill:
+
+```
+Follow the instructions in ~/dev/skills/skills/multi-review/SKILL.md
+```
+
+#### pi — package install
+
+```bash
+pi install -l ~/dev/skills
 ```
 
 After pulling updates, run `/reload` in pi to reload extensions, skills, and prompts.
 
 ## Layout
 
-- `skills/` — each skill lives in its own folder with a `SKILL.md`.
+- `skills/` — each skill in its own folder with a `SKILL.md`.
 - `extensions/` — TypeScript extensions loaded by pi.
 
 ## Adding content
