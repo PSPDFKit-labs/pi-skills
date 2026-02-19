@@ -28,7 +28,7 @@ Extensions are TypeScript plugins that run inside **pi** only and are not compat
 - [`start-design-plan`](extensions/start-design-plan/) — Claude-style design workflow with `/start-design-plan` and `/resume-design-plan`, plus `ask_user_question` and `design_plan_tracker` tools. Ported from concepts in `ed3d-plan-and-execute` (`https://github.com/ed3dai/ed3d-plugins`). Extension-specific license in `extensions/start-design-plan/LICENSE`.
 - [`pi-skills-update-checker`](extensions/pi-skills-update-checker.ts) — checks for new commits on startup and shows a widget when updates are available.
 
-## Setup — other agents (skills only)
+## Setup — Skills (with Claude, Codex, etc)
 
 Skills are standalone markdown files. Clone the repo once, then wire individual skills into your agent.
 
