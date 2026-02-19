@@ -97,7 +97,7 @@ Follow the instructions in ~/dev/skills/skills/multi-review/SKILL.md
 
 ## Setup — pi (skills + extensions)
 
-pi has native package support for this repo. Unlike other agents, pi loads both skills (as slash commands) and extensions (as hooks and tools registered on session start).
+[pi](https://pi.dev/) ([repository](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)) has native package support for this repo. Unlike other agents, pi loads both skills (as slash commands) and extensions (as hooks and tools registered on session start).
 
 ### Install
 
