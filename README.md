@@ -28,7 +28,9 @@ Extensions are TypeScript plugins that run inside **pi** only and are not compat
 - [`start-design-plan`](extensions/start-design-plan/) — Claude-style design workflow with `/start-design-plan` and `/resume-design-plan`, plus `ask_user_question` and `design_plan_tracker` tools. Ported from concepts in `ed3d-plan-and-execute` (`https://github.com/ed3dai/ed3d-plugins`). Extension-specific license in `extensions/start-design-plan/LICENSE`.
 - [`pi-skills-update-checker`](extensions/pi-skills-update-checker.ts) — checks for new commits on startup and shows a widget when updates are available.
 
-## Setup
+## Setup — other agents (skills only)
+
+Skills are standalone markdown files. Clone the repo once, then wire individual skills into your agent.
 
 ### 1. Clone the repo
 
@@ -36,7 +38,7 @@ Extensions are TypeScript plugins that run inside **pi** only and are not compat
 git clone https://github.com/PSPDFKit-labs/pi-skills ~/dev/skills
 ```
 
-Keep it somewhere stable — your symlinks and references will point here. Pull to update:
+Keep it somewhere stable — your symlinks and references will point here. To update:
 
 ```bash
 cd ~/dev/skills && git pull
@@ -44,11 +46,9 @@ cd ~/dev/skills && git pull
 
 ### 2. Wire up your agent
 
-Each `SKILL.md` is a standalone markdown file. How you expose it depends on your agent:
-
 #### Slash commands — Claude Code, Cursor, Windsurf
 
-Agents that support custom slash commands load them from a directory of markdown files. Symlink individual skills there so updates are picked up automatically:
+Symlink individual skills into your agent's commands directory so updates are picked up automatically:
 
 ```bash
 # Claude Code
@@ -93,21 +93,27 @@ For one-off use, just tell your agent where to find the skill:
 Follow the instructions in ~/dev/skills/skills/multi-review/SKILL.md
 ```
 
-#### pi — package install
+---
 
-pi treats this repo as a local package. Install it once per project (writes a `.pi/settings.json` entry):
+## Setup — pi (skills + extensions)
+
+pi has native package support for this repo. Unlike other agents, pi loads both skills (as slash commands) and extensions (as hooks and tools registered on session start).
+
+### Install
+
+Install as a project-local package (writes `.pi/settings.json`):
 
 ```bash
 pi install -l ~/dev/skills
 ```
 
-Or install directly from GitHub without cloning first:
+Or directly from GitHub without cloning first:
 
 ```bash
 pi install -l https://github.com/PSPDFKit-labs/pi-skills
 ```
 
-Or add it manually to `.pi/settings.json`:
+Or add manually to `.pi/settings.json`:
 
 ```json
 {
@@ -117,13 +123,15 @@ Or add it manually to `.pi/settings.json`:
 }
 ```
 
-Once installed, pi automatically loads all skills from `skills/` and all extensions from `extensions/`. Skills appear as slash commands; extensions register hooks and tools on session start.
+### Update
 
-To update, pull the repo and run `/reload` in pi to pick up the changes without restarting:
+Pull the repo, then reload inside pi to pick up changes without restarting:
 
 ```bash
 cd ~/dev/skills && git pull
-# then in pi:
+```
+
+```
 /reload
 ```
 
