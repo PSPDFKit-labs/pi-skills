@@ -95,11 +95,37 @@ Follow the instructions in ~/dev/skills/skills/multi-review/SKILL.md
 
 #### pi — package install
 
+pi treats this repo as a local package. Install it once per project (writes a `.pi/settings.json` entry):
+
 ```bash
 pi install -l ~/dev/skills
 ```
 
-After pulling updates, run `/reload` in pi to reload extensions, skills, and prompts.
+Or install directly from GitHub without cloning first:
+
+```bash
+pi install -l https://github.com/PSPDFKit-labs/pi-skills
+```
+
+Or add it manually to `.pi/settings.json`:
+
+```json
+{
+  "packages": [
+    "/absolute/path/to/pi-skills"
+  ]
+}
+```
+
+Once installed, pi automatically loads all skills from `skills/` and all extensions from `extensions/`. Skills appear as slash commands; extensions register hooks and tools on session start.
+
+To update, pull the repo and run `/reload` in pi to pick up the changes without restarting:
+
+```bash
+cd ~/dev/skills && git pull
+# then in pi:
+/reload
+```
 
 ## Layout
 
