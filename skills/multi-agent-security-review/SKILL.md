@@ -80,7 +80,7 @@ Example:
   --parallel 2
 ```
 
-### 0) Scope & Inventory (Orchestrator)
+### 0) Scope & Inventory (Primary Agent)
 - Confirm threat model, constraints, and test boundaries.
 - Identify high-value subsystems (parsers, upload pipelines, rendering, network calls, auth boundaries).
 - **Decide batch size before you run anything.** If the scope spans multiple major components or languages, split into separate runs. Indicators that you should split:
