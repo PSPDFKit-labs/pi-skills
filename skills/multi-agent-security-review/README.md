@@ -16,11 +16,11 @@ The shell runner drives the tracer → resolver → bypass → orchestrator pipe
 ### Sequence diagram
 ```mermaid
 sequenceDiagram
-  participant Runner as run-multi-agent-review.sh
-  participant Tracer as tracer (pi)
-  participant Resolver as resolver (pi)
-  participant Bypass as bypass (pi)
-  participant Orchestrator as orchestrator (pi)
+  participant Runner as "run-multi-agent-review"
+  participant Tracer as "tracer (pi)"
+  participant Resolver as "resolver (pi)"
+  participant Bypass as "bypass (pi)"
+  participant Orchestrator as "orchestrator (pi)"
 
   Runner->>Tracer: run with focus/targets/context
   Tracer-->>Runner: tracer.md
