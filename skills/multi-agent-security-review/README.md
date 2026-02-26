@@ -28,19 +28,19 @@ sequenceDiagram
   Runner->>Runner: extract Resolver Task List
   loop for each resolver task
     Runner->>Resolver: run with tracer.md + context
-    Resolver-->>Runner: resolver-TASK.md
+    Resolver-->>Runner: resolver-<task>.md
   end
 
   Runner->>Runner: extract Bypass Task Lists
   loop for each bypass task
     Runner->>Bypass: run with tracer.md + resolver.md + per-task files
-    Bypass-->>Runner: bypass-RESOLVER--TASK.md
+    Bypass-->>Runner: bypass-<resolver>--<task>.md
   end
 
   alt any bypass failed
     Runner->>Runner: record failure
     Runner->>Bypass: retry with resolver.md only
-    Bypass-->>Runner: bypass-ID-retry.md
+    Bypass-->>Runner: bypass-<id>-retry.md
   end
 
   Runner->>Orchestrator: run with tracer + resolver + bypass outputs
