@@ -9,7 +9,7 @@ import {
 	truncateHead,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { Container, Key, Text, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { Container, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 type IssueRefs = {
 	readonly zendeskId: number | null;
@@ -28,6 +28,7 @@ type ZendeskContext = {
 	readonly subject: string;
 	readonly status: string | null;
 	readonly priority: string | null;
+	readonly url: string | null;
 	readonly description: string;
 	readonly comments: Array<TicketComment>;
 };
@@ -43,6 +44,7 @@ type JiraContext = {
 	readonly summary: string;
 	readonly status: string | null;
 	readonly assignee: string | null;
+	readonly url: string | null;
 	readonly description: string;
 	readonly comments: Array<JiraComment>;
 };
@@ -109,6 +111,46 @@ const coerceNumber = (value: unknown): number | null => {
 		}
 	}
 	return null;
+};
+
+const toZendeskBrowserUrl = (ticketApiUrl: string | null, ticketId: number): string | null => {
+	if (!ticketApiUrl) {
+		return null;
+	}
+	try {
+		const parsed = new URL(ticketApiUrl);
+		return `${parsed.origin}/agent/tickets/${ticketId}`;
+	} catch {
+		return null;
+	}
+};
+
+const toJiraBrowserUrl = (issueSelfUrl: string | null, issueKey: string): string | null => {
+	if (!issueSelfUrl) {
+		return null;
+	}
+	try {
+		const parsed = new URL(issueSelfUrl);
+		return `${parsed.origin}/browse/${issueKey}`;
+	} catch {
+		return null;
+	}
+};
+
+const openUrlInBrowser = async (pi: ExtensionAPI, url: string): Promise<void> => {
+	const platform = process.platform;
+	const command = platform === "darwin" ? "open" : platform === "win32" ? "cmd" : "xdg-open";
+	const args = platform === "darwin"
+		? [url]
+		: platform === "win32"
+			? ["/c", "start", "", url]
+			: [url];
+
+	const result = await pi.exec(command, args);
+	if (result.code !== 0) {
+		const detail = result.stderr.trim() || result.stdout.trim() || `failed to open url: ${url}`;
+		throw new Error(detail);
+	}
 };
 
 const summarizeRefs = (refs: IssueRefs): string => {
@@ -212,13 +254,18 @@ const extractZendeskContext = (
 		status?: unknown;
 		priority?: unknown;
 		description?: unknown;
+		url?: unknown;
 	};
 
+	const ticketId = coerceNumber(ticket.id) ?? zendeskId;
+	const ticketApiUrl = coerceString(ticket.url);
+
 	return {
-		id: coerceNumber(ticket.id) ?? zendeskId,
+		id: ticketId,
 		subject: coerceString(ticket.subject) ?? "(no subject)",
 		status: coerceString(ticket.status),
 		priority: coerceString(ticket.priority),
+		url: toZendeskBrowserUrl(ticketApiUrl, ticketId),
 		description: coerceString(ticket.description) ?? "",
 		comments: extractZendeskComments(rawComments),
 	};
@@ -261,6 +308,7 @@ const extractJiraComments = (rawIssue: unknown): Array<JiraComment> => {
 const extractJiraContext = (jiraKey: string, rawIssue: unknown): JiraContext => {
 	const issue = rawIssue as {
 		key?: unknown;
+		self?: unknown;
 		fields?: {
 			summary?: unknown;
 			status?: { name?: unknown };
@@ -268,15 +316,18 @@ const extractJiraContext = (jiraKey: string, rawIssue: unknown): JiraContext => 
 			description?: unknown;
 		};
 	};
+	const issueKey = coerceString(issue.key) ?? jiraKey;
 	const status = coerceString(issue.fields?.status?.name);
 	const assignee = coerceString(issue.fields?.assignee?.displayName) ?? coerceString(issue.fields?.assignee?.name);
 	const description = coerceString(issue.fields?.description) ?? "";
+	const issueSelfUrl = coerceString(issue.self);
 
 	return {
-		key: coerceString(issue.key) ?? jiraKey,
+		key: issueKey,
 		summary: coerceString(issue.fields?.summary) ?? "(no summary)",
 		status,
 		assignee,
+		url: toJiraBrowserUrl(issueSelfUrl, issueKey),
 		description,
 		comments: extractJiraComments(rawIssue),
 	};
@@ -300,6 +351,7 @@ const buildViewerItems = (context: CombinedContext): Array<ViewerItem> => {
 			title: `Jira ${issue.key}`,
 			lines: [
 				`Jira ${issue.key}`,
+				`URL: ${issue.url ?? "(unavailable)"}`,
 				`Summary: ${issue.summary}`,
 				`Status: ${issue.status ?? "unknown"}`,
 				`Assignee: ${issue.assignee ?? "unassigned"}`,
@@ -331,6 +383,7 @@ const buildViewerItems = (context: CombinedContext): Array<ViewerItem> => {
 			title: `Zendesk #${ticket.id}`,
 			lines: [
 				`Zendesk #${ticket.id}`,
+				`URL: ${ticket.url ?? "(unavailable)"}`,
 				`Subject: ${ticket.subject}`,
 				`Status: ${ticket.status ?? "unknown"}`,
 				`Priority: ${ticket.priority ?? "unknown"}`,
@@ -368,7 +421,7 @@ const buildViewerItems = (context: CombinedContext): Array<ViewerItem> => {
 	return items;
 };
 
-const runScrollableViewer = async (ctx: ExtensionCommandContext, context: CombinedContext): Promise<void> => {
+const runScrollableViewer = async (pi: ExtensionAPI, ctx: ExtensionCommandContext, context: CombinedContext): Promise<void> => {
 	const items = buildViewerItems(context);
 
 	await ctx.ui.custom<void>((tui, theme, _keys, done) => {
@@ -398,6 +451,27 @@ const runScrollableViewer = async (ctx: ExtensionCommandContext, context: Combin
 		};
 
 		const selectedItem = (): ViewerItem => items[selectedIndex] ?? items[0]!;
+
+		const openFromViewer = (target: "jira" | "zendesk"): void => {
+			const url = target === "jira" ? context.jira?.url : context.zendesk?.url;
+			if (!url) {
+				ctx.ui.notify(`${target === "jira" ? "Jira" : "Zendesk"} URL is unavailable`, "warning");
+				return;
+			}
+
+			ctx.ui.setStatus("nutrient-bug-open", ctx.ui.theme.fg("accent", `Opening ${target} URL...`));
+			void openUrlInBrowser(pi, url)
+				.then(() => {
+					ctx.ui.notify(`Opened ${target} issue in browser`, "info");
+				})
+				.catch((error) => {
+					const message = error instanceof Error ? error.message : String(error);
+					ctx.ui.notify(`Failed to open ${target} URL: ${message}`, "error");
+				})
+				.finally(() => {
+					ctx.ui.setStatus("nutrient-bug-open", undefined);
+				});
+		};
 
 		const ensureSelectedVisible = (): void => {
 			const bodyRows = getBodyRows();
@@ -435,9 +509,15 @@ const runScrollableViewer = async (ctx: ExtensionCommandContext, context: Combin
 			return output;
 		};
 
+		const padToVisibleWidth = (text: string, width: number): string => {
+			const missing = Math.max(0, width - visibleWidth(text));
+			return `${text}${" ".repeat(missing)}`;
+		};
+
 		const frameLine = (innerText: string, innerWidth: number): string => {
-			const clamped = truncateToWidth(innerText, innerWidth, "…").padEnd(innerWidth, " ");
-			return theme.fg("accent", "│") + clamped + theme.fg("accent", "│");
+			const clamped = truncateToWidth(innerText, innerWidth, "…");
+			const padded = padToVisibleWidth(clamped, innerWidth);
+			return theme.fg("accent", "│") + padded + theme.fg("accent", "│");
 		};
 
 		const refresh = (width: number): void => {
@@ -448,6 +528,7 @@ const runScrollableViewer = async (ctx: ExtensionCommandContext, context: Combin
 			frame.push(theme.fg("accent", `┌${"─".repeat(innerWidth)}┐`));
 			frame.push(frameLine(theme.fg("accent", theme.bold(`Nutrient issue viewer — ${summarizeRefs(context.refs)}`)), innerWidth));
 			frame.push(frameLine(theme.fg("dim", `${focus === "items" ? "Focus: items" : "Focus: detail"} (Tab switches pane)`), innerWidth));
+			frame.push(frameLine(theme.fg("dim", "Shortcuts: j open Jira • z open Zendesk"), innerWidth));
 			frame.push(theme.fg("accent", `├${"─".repeat(innerWidth)}┤`));
 
 			for (const line of renderBody(innerWidth)) {
@@ -457,7 +538,7 @@ const runScrollableViewer = async (ctx: ExtensionCommandContext, context: Combin
 			const bodyRows = getBodyRows();
 			const rightLines = selectedItem().lines;
 			const endDetailLine = Math.min(detailOffset + bodyRows, rightLines.length);
-			const footer = `Items ${selectedIndex + 1}/${items.length} | Detail lines ${detailOffset + 1}-${endDetailLine}/${Math.max(1, rightLines.length)} | ↑/↓ move/scroll | PgUp/PgDn | Enter/Esc close`;
+			const footer = `Items ${selectedIndex + 1}/${items.length} | Detail lines ${detailOffset + 1}-${endDetailLine}/${Math.max(1, rightLines.length)} | ↑/↓ move/scroll | j open Jira | z open Zendesk | Enter/Esc close`;
 			frame.push(theme.fg("accent", `├${"─".repeat(innerWidth)}┤`));
 			frame.push(frameLine(theme.fg("dim", footer), innerWidth));
 			frame.push(theme.fg("accent", `└${"─".repeat(innerWidth)}┘`));
@@ -486,6 +567,14 @@ const runScrollableViewer = async (ctx: ExtensionCommandContext, context: Combin
 			handleInput(data: string) {
 				if (matchesKey(data, Key.tab)) {
 					focus = focus === "items" ? "detail" : "items";
+					return consume();
+				}
+				if (data.toLowerCase() === "j") {
+					openFromViewer("jira");
+					return consume();
+				}
+				if (data.toLowerCase() === "z") {
+					openFromViewer("zendesk");
 					return consume();
 				}
 
@@ -636,18 +725,6 @@ const toModelContextText = (context: CombinedContext): string => {
 	return truncateForModel(JSON.stringify(context, null, 2));
 };
 
-const toAgentMemoryText = (context: CombinedContext): string => {
-	const serialized = JSON.stringify(context, null, 2);
-	const truncated = truncateHead(serialized, {
-		maxBytes: 25_000,
-		maxLines: 900,
-	});
-	if (!truncated.truncated) {
-		return serialized;
-	}
-	return `${truncated.content}\n\n[Context truncated for memory: ${truncated.outputLines} of ${truncated.totalLines} lines (${truncated.outputBytes} of ${truncated.totalBytes} bytes)]`;
-};
-
 export default function nutrientBugExtension(pi: ExtensionAPI): void {
 	let state: IssueState = emptyState();
 
@@ -706,20 +783,10 @@ export default function nutrientBugExtension(pi: ExtensionAPI): void {
 		return context;
 	};
 
-	const rememberContextForAgent = (context: CombinedContext): void => {
-		const summary = summarizeRefs(context.refs);
-		pi.sendMessage({
-			customType: "nutrient-bug-context",
-			content: `Loaded nutrient bug context: ${summary}\n\n${toAgentMemoryText(context)}`,
-			display: false,
-			details: context,
-		});
-	};
-
 	const promptBugSummary = (context: CombinedContext): void => {
 		const refs = summarizeRefs(context.refs);
 		pi.sendUserMessage(
-			`Please summarize the active bug for the user (${refs}). Keep it concise and include: customer-reported issue, key timeline updates, current Jira/Zendesk status, and likely next technical step.`
+			`Please call nutrient_bug_get_context (refresh: false) and summarize the active bug for the user (${refs}). Keep it concise and include: customer-reported issue, key timeline updates, current Jira/Zendesk status, and likely next technical step.`
 		);
 	};
 
@@ -773,7 +840,6 @@ export default function nutrientBugExtension(pi: ExtensionAPI): void {
 			let context: CombinedContext;
 			try {
 				context = await loadContextIfNeeded(ctx, false);
-				rememberContextForAgent(context);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(`Issue set, but context fetch failed: ${message}`, "warning");
@@ -786,6 +852,7 @@ export default function nutrientBugExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+
 	pi.registerCommand("bug-view", {
 		description: "Open a scrollable read-only viewer for the active nutrient issue",
 		handler: async (_args, ctx) => {
@@ -795,7 +862,7 @@ export default function nutrientBugExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify("bug-view requires interactive UI", "warning");
 					return;
 				}
-				await runScrollableViewer(ctx, context);
+				await runScrollableViewer(pi, ctx, context);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(message, "error");
@@ -808,8 +875,7 @@ export default function nutrientBugExtension(pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => {
 			ctx.ui.setStatus("nutrient-bug-fetch", ctx.ui.theme.fg("accent", "Refreshing bug data and updating context..."));
 			try {
-				const context = await loadContextIfNeeded(ctx, true);
-				rememberContextForAgent(context);
+				await loadContextIfNeeded(ctx, true);
 				ctx.ui.notify("Issue context refreshed", "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
