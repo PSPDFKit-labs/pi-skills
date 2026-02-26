@@ -2,6 +2,76 @@
 
 This file documents implementation details and gotchas for running the multi-agent security review workflow. It is intentionally **not** loaded as a skill so that operational notes do not leak into prompts.
 
+## Runner Script Map (run-multi-agent-review.sh)
+The shell runner drives the tracer → resolver → bypass → orchestrator pipeline from cold. It is designed to be readable and safe to modify if you understand the moving parts.
+
+### High‑level flow
+1. Parse CLI args (`--focus`, `--target`, `--context`, `--parallel`).
+2. Run **tracer** → write `tracer.md`.
+3. Parse tracer’s **Resolver Task List** → spawn one resolver per task.
+4. Parse each resolver’s **Bypass Task List** → spawn one bypass per task.
+5. Merge all outputs into `orchestrator.md`.
+6. If any bypass fails, retry once using *resolver output only* as context.
+
+### Sequence diagram
+```mermaid
+sequenceDiagram
+  participant Runner as run-multi-agent-review.sh
+  participant Tracer as tracer (pi)
+  participant Resolver as resolver (pi)
+  participant Bypass as bypass (pi)
+  participant Orchestrator as orchestrator (pi)
+
+  Runner->>Tracer: run with focus/targets/context
+  Tracer-->>Runner: tracer.md
+
+  Runner->>Runner: extract Resolver Task List
+  loop for each resolver task
+    Runner->>Resolver: run with tracer.md + context
+    Resolver-->>Runner: resolver-<task>.md
+  end
+
+  Runner->>Runner: extract Bypass Task Lists
+  loop for each bypass task
+    Runner->>Bypass: run with tracer.md + resolver.md + per-task files
+    Bypass-->>Runner: bypass-<resolver>--<task>.md
+  end
+
+  alt any bypass failed
+    Runner->>Runner: record failure
+    Runner->>Bypass: retry with resolver.md only
+    Bypass-->>Runner: bypass-<id>-retry.md
+  end
+
+  Runner->>Orchestrator: run with tracer + resolver + bypass outputs
+  Orchestrator-->>Runner: orchestrator.md
+```
+
+### Key functions
+- `log()` — stderr logger used throughout.
+- `sanitize_id()` — normalizes task IDs for filenames.
+- `extract_tasks(section, file)` — parses task list sections and extracts:
+  - task id
+  - task description
+  - `files:` list (optional)
+  - **Skips** entries that say “None”.
+- `task_files_to_context(files)` — converts `files:` entries into `@path` context args, stripping line ranges and ignoring missing files.
+- `wait_for_slot()` / `wait_for_pids()` — parallelism control for resolver/bypass phases.
+
+### Output structure
+Outputs are written to `security-review/<run-id>/`:
+- `tracer.md`
+- `resolver-<task-id>.md`
+- `bypass-<resolver-id>--<task-id>.md`
+- `orchestrator.md`
+- `bypass-failures.txt` (only when needed)
+
+### Gotchas (runner behavior)
+- **Task list parsing is strict.** `files:` is the only source of per‑task context files; anything outside `files:` is treated as description text. If you omit `files:`, the bypass will still run, but without extra file context.
+- **“None” bypass entries are ignored.** If a resolver outputs `- None: ...` or `- None.` that task is skipped.
+- **Retries are resolver‑only.** If a bypass fails, the retry uses *only* the resolver output (no tracer/context files). This is intentional to avoid path parsing failures.
+- **Parallelism is soft.** The runner uses job counting; very high `--parallel` can still starve the main session or hit provider rate limits.
+
 ## Persona + Topic Injection
 If you are **not** using the stateful-memory extension, you can ignore this section.
 
