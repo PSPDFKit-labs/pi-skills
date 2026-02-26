@@ -38,6 +38,8 @@ The `run-multi-agent-review.sh` script produces an **orchestrator.md** file at t
 ## Coordination Model
 Use independent Pi runs for isolation of analysis paths. The **Primary Agent** owns the sequence and spawns each role as a separate `pi` process (via `pi_run` or an SDK session) so each role has a clean context.
 
+**Dependency:** This workflow expects the `pi_run` tool to be available (provided by the `pi-self` extension). If it is missing, **interrupt and tell the user** to load it, and note that it is bundled in the same `pi-skills` repo as this skill (avoid downloading arbitrary third-party code to satisfy the dependency).
+
 **Recommended approach (programmatic spawning):**
 1. Primary Agent defines scope, targets, and expected sinks.
 2. Primary Agent spawns Tracer via `pi_run` (or SDK `createAgentSession`).

@@ -13,6 +13,7 @@ Shared pi skills and extensions used by the team. Add this repo as a local packa
 - `github` — use the `gh` CLI for issues, PRs, and runs.
 - `github-repo-search` — search any repo via `gh search` and deep-read files via the GitHub API without cloning.
 - `multi-review` — multi-model PR review workflow.
+- `multi-agent-security-review` — tracer/resolver/bypass workflow for security reviews with a runner that spawns independent pi sessions.
 - `tmux` — drive tmux sessions for interactive tools.
 
 ### Extensions
@@ -25,6 +26,7 @@ Shared pi skills and extensions used by the team. Add this repo as a local packa
 - `start-design-plan` — Claude-style design workflow extension with `/start-design-plan` and `/resume-design-plan`, plus `ask_user_question` and `design_plan_tracker` tools. Ported from concepts in `ed3d-plan-and-execute` (`https://github.com/ed3dai/ed3d-plugins`). Extension-specific license in `extensions/start-design-plan/LICENSE`.
 - `pi-skills-update-checker` — checks for new commits on startup and shows a widget when updates are available.
 - `nutrient-bug` — lightweight read-only Zendesk + Jira issue context workflow with `/bug`, `/bug-view`, and `nutrient_bug_get_context`.
+- `pi-self` — adds the `pi_run` tool for spawning `pi` subprocesses (required by `multi-agent-security-review`).
 
 ## Usage
 
