@@ -9,7 +9,7 @@ import {
 	truncateHead,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { Container, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { Container, Key, Text, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 
 type IssueRefs = {
 	readonly zendeskId: number | null;
@@ -483,13 +483,32 @@ const runScrollableViewer = async (pi: ExtensionAPI, ctx: ExtensionCommandContex
 			}
 		};
 
-		const renderBody = (innerWidth: number): Array<string> => {
-			const bodyRows = getBodyRows();
+		const getLayout = (innerWidth: number): { leftWidth: number; rightWidth: number; gap: string } => {
 			const totalWidth = Math.max(36, innerWidth);
 			const gap = " │ ";
 			const leftWidth = Math.max(18, Math.min(36, Math.floor(totalWidth * 0.33)));
 			const rightWidth = Math.max(12, totalWidth - leftWidth - gap.length);
-			const rightLines = selectedItem().lines;
+			return { leftWidth, rightWidth, gap };
+		};
+
+		const getWrappedDetailLines = (innerWidth: number): Array<string> => {
+			const { rightWidth } = getLayout(innerWidth);
+			const wrapped: Array<string> = [];
+			for (const line of selectedItem().lines) {
+				const lines = wrapTextWithAnsi(line, rightWidth);
+				if (lines.length === 0) {
+					wrapped.push("");
+					continue;
+				}
+				wrapped.push(...lines);
+			}
+			return wrapped;
+		};
+
+		const renderBody = (innerWidth: number): Array<string> => {
+			const bodyRows = getBodyRows();
+			const { leftWidth, rightWidth, gap } = getLayout(innerWidth);
+			const rightLines = getWrappedDetailLines(innerWidth);
 			const output: Array<string> = [];
 
 			for (let row = 0; row < bodyRows; row += 1) {
@@ -536,7 +555,7 @@ const runScrollableViewer = async (pi: ExtensionAPI, ctx: ExtensionCommandContex
 			}
 
 			const bodyRows = getBodyRows();
-			const rightLines = selectedItem().lines;
+			const rightLines = getWrappedDetailLines(innerWidth);
 			const endDetailLine = Math.min(detailOffset + bodyRows, rightLines.length);
 			const footer = `Items ${selectedIndex + 1}/${items.length} | Detail lines ${detailOffset + 1}-${endDetailLine}/${Math.max(1, rightLines.length)} | ↑/↓ move/scroll | j open Jira | z open Zendesk | Enter/Esc close`;
 			frame.push(theme.fg("accent", `├${"─".repeat(innerWidth)}┤`));
@@ -579,13 +598,15 @@ const runScrollableViewer = async (pi: ExtensionAPI, ctx: ExtensionCommandContex
 				}
 
 				const bodyRows = getBodyRows();
+				const inputInnerWidth = Math.max(36, lastWidth - 2);
+				const wrappedDetailCount = getWrappedDetailLines(inputInnerWidth).length;
 				if (matchesKey(data, Key.down)) {
 					if (focus === "items") {
 						selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
 						detailOffset = 0;
 						ensureSelectedVisible();
 					} else {
-						detailOffset = Math.min(detailOffset + 1, Math.max(0, selectedItem().lines.length - bodyRows));
+						detailOffset = Math.min(detailOffset + 1, Math.max(0, wrappedDetailCount - bodyRows));
 					}
 					return consume();
 				}
@@ -605,7 +626,7 @@ const runScrollableViewer = async (pi: ExtensionAPI, ctx: ExtensionCommandContex
 						detailOffset = 0;
 						ensureSelectedVisible();
 					} else {
-						detailOffset = Math.min(detailOffset + bodyRows, Math.max(0, selectedItem().lines.length - bodyRows));
+						detailOffset = Math.min(detailOffset + bodyRows, Math.max(0, wrappedDetailCount - bodyRows));
 					}
 					return consume();
 				}
@@ -635,7 +656,7 @@ const runScrollableViewer = async (pi: ExtensionAPI, ctx: ExtensionCommandContex
 						detailOffset = 0;
 						ensureSelectedVisible();
 					} else {
-						detailOffset = Math.max(0, selectedItem().lines.length - bodyRows);
+						detailOffset = Math.max(0, wrappedDetailCount - bodyRows);
 					}
 					return consume();
 				}
