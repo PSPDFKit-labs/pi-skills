@@ -177,7 +177,10 @@ Create a **sink report** after the final report is drafted. The sink report is a
    - Keep it concise (3–6 items per component).
    - For each sink, explain why it’s sensitive, and what change patterns are risky.
    - Call out any important guardrails (sanitizers, allowlists, permissions, or default settings) that make the sink safer or more dangerous.
-5. **Add evidence references** (file paths and line ranges) for each top sink so engineers can jump to code quickly.
+5. **Mermaid hygiene (important):**
+   - Use **quoted labels** and `<br/>` for line breaks (GitHub Mermaid is strict).
+   - Escape literal HTML in labels (e.g., use `&lt;` `&gt;`).
+6. **Add evidence references** (file paths and line ranges) for each top sink so engineers can jump to code quickly.
 
 **Output**
 - Write to `security-review/sink-report.md`.
