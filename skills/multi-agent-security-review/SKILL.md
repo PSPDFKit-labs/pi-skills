@@ -80,7 +80,7 @@ Example:
   --parallel 2
 ```
 
-### 0) Scope & Inventory (Primary Agent)
+### 0) Scope & Inventory (Orchestrator)
 - Confirm threat model, constraints, and test boundaries.
 - Identify high-value subsystems (parsers, upload pipelines, rendering, network calls, auth boundaries).
 - **Decide batch size before you run anything.** If the scope spans multiple major components or languages, split into separate runs. Indicators that you should split:
@@ -154,7 +154,41 @@ Bypass proves exploitability with a minimal, safe PoC.
 ### 5) Post-Run Validation & Correlation (Cold-Start Playbook)
 Use this after the multi-agent runs complete to promote parking-lot items and produce a final report. This is the exact workflow used in practice and is designed for a cold Primary Agent with no project context.
 
-### 6) Sink Report (Final Step — Post-Final-Report)
+### 6) Final Report Drafting (Before Sink Report)
+Create a single **final report** that the user can rely on without reading the raw tracer/resolver/bypass outputs. This report is the authoritative artifact for validated findings and high‑level risk themes.
+
+**Purpose**
+- Provide a clean, curated summary of what is real vs. unverified.
+- Explain cross‑component risk threads (trust‑boundary violations, SSRF, DOM sinks, etc.).
+- Make preconditions explicit so operational teams can assess exposure.
+
+**Inputs**
+- `orchestrator.md` from each run (for raw merged findings).
+- Tracer/Resolver/Bypass outputs for evidence and gate validation.
+- Any external threat context provided by the user (e.g., competitor post).
+
+**Process**
+1. **Validate before you write**: Read each `orchestrator.md` and treat all items as *unverified* until you personally confirm the source → gate → sink chain in code. Use `grep`/`read` to trace the path and verify trust boundaries. Promotion to “Validated” is a Primary Agent responsibility, not the runner’s.
+2. **Collect evidence**: For each candidate issue, follow the chain from source → transform → sink. Only promote if the trust boundary is clear and gates are verified.
+3. **Separate validated vs. parking‑lot**:
+   - *Validated*: concrete chain, verified gate status, clear sink.
+   - *Parking‑lot*: plausible but unverified (missing trust boundary or gate proof).
+4. **Capture preconditions**: note configuration defaults, endpoint exposure, and auth/claim requirements that affect exploitability.
+5. **Correlate across components**: identify shared choke points (e.g., annotation JSON → web DOM, URL fetch policies across services).
+6. **Draft the report with this structure**:
+   - Executive summary (1–2 paragraphs).
+   - Correlated threads (bullets with brief explanations).
+   - Validated findings (each with why promoted + impact + preconditions).
+   - Parking‑lot findings (short; include next validation steps).
+   - Recommended next validation pass.
+   - Appendix with evidence references (files/functions/line ranges).
+7. **Maintain traceability**: Every finding must list evidence that can be opened directly by an engineer.
+
+**Output**
+- Write to `security-review/final-report.md`.
+- Make it readable in isolation (no reliance on internal notes).
+
+### 7) Sink Report (Final Step — Post-Final-Report)
 Create a **sink report** after the final report is drafted. The sink report is a focused, high‑level guide for developers and security engineers that highlights the **top sinks of concern** per component. It is not a vulnerability list; it is a **maintenance map** that shows where future changes are most likely to introduce security risk.
 
 **Purpose**
