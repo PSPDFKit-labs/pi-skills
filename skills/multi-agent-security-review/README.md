@@ -13,16 +13,38 @@ The shell runner drives the tracer → resolver → bypass → orchestrator pipe
 5. Merge all outputs into `orchestrator.md`.
 6. If any bypass fails, retry once using *resolver output only* as context.
 
-### Workflow diagram
+### Sequence diagram
 ```mermaid
-flowchart TD
-  Runner[Runner script] --> Tracer[Tracer run]
-  Tracer --> ResolverTasks[Resolver task list]
-  ResolverTasks --> Resolvers[Resolvers (fan-out)]
-  Resolvers --> BypassTasks[Bypass task lists]
-  BypassTasks --> Bypasses[Bypasses (fan-out)]
-  Bypasses --> Orchestrator[Orchestrator merge]
-  Orchestrator --> Report[orchestrator.md]
+sequenceDiagram
+  participant Runner as "run-multi-agent-review"
+  participant Tracer as "tracer (pi)"
+  participant Resolver as "resolver (pi)"
+  participant Bypass as "bypass (pi)"
+  participant Orchestrator as "orchestrator (pi)"
+
+  Runner->>Tracer: run with focus/targets/context
+  Tracer-->>Runner: tracer.md
+
+  Runner->>Runner: extract Resolver Task List
+  loop for each resolver task
+    Runner->>Resolver: run with tracer.md + context
+    Resolver-->>Runner: resolver-<task>.md
+  end
+
+  Runner->>Runner: extract Bypass Task Lists
+  loop for each bypass task
+    Runner->>Bypass: run with tracer.md + resolver.md + per-task files
+    Bypass-->>Runner: bypass-<resolver>--<task>.md
+  end
+
+  alt any bypass failed
+    Runner->>Runner: record failure
+    Runner->>Bypass: retry with resolver.md only
+    Bypass-->>Runner: bypass-<id>-retry.md
+  end
+
+  Runner->>Orchestrator: run with tracer + resolver + bypass outputs
+  Orchestrator-->>Runner: orchestrator.md
 ```
 
 ### Key functions
