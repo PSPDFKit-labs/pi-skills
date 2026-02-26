@@ -17,18 +17,33 @@ The shell runner drives the tracer → resolver → bypass → orchestrator pipe
 ```mermaid
 sequenceDiagram
   participant Runner as "run-multi-agent-review"
-  participant Tracer as "tracer"
-  participant Resolver as "resolver"
-  participant Bypass as "bypass"
-  participant Orchestrator as "orchestrator"
+  participant Tracer as "tracer (pi)"
+  participant Resolver as "resolver (pi)"
+  participant Bypass as "bypass (pi)"
+  participant Orchestrator as "orchestrator (pi)"
 
-  Runner->>Tracer: run tracer
+  Runner->>Tracer: run with focus/targets/context
   Tracer-->>Runner: tracer.md
-  Runner->>Resolver: run resolver tasks (fan-out)
-  Resolver-->>Runner: resolver-*.md
-  Runner->>Bypass: run bypass tasks (fan-out)
-  Bypass-->>Runner: bypass-*.md
-  Runner->>Orchestrator: merge outputs
+
+  Runner->>Runner: extract Resolver Task List
+  loop for each resolver task
+    Runner->>Resolver: run with tracer.md + context
+    Resolver-->>Runner: resolver-<task>.md
+  end
+
+  Runner->>Runner: extract Bypass Task Lists
+  loop for each bypass task
+    Runner->>Bypass: run with tracer.md + resolver.md + per-task files
+    Bypass-->>Runner: bypass-<resolver>--<task>.md
+  end
+
+  alt any bypass failed
+    Runner->>Runner: record failure
+    Runner->>Bypass: retry with resolver.md only
+    Bypass-->>Runner: bypass-<id>-retry.md
+  end
+
+  Runner->>Orchestrator: run with tracer + resolver + bypass outputs
   Orchestrator-->>Runner: orchestrator.md
 ```
 
