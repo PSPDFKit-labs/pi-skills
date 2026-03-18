@@ -23,10 +23,20 @@ Runs the `code-review` skill with 2 different models in parallel, then synthesiz
 
 2. **Run 2 parallel reviews via bash**
    ```bash
-   pi -p --model claude-opus-4-6 "Read and follow ~/dev/pi-skills/code-review/SKILL.md to review the PR. Diff is at $PR_DIFF" > "$TMP_DIR/review-opus.md" &
-   pi -p --model gpt-5.3-codex --provider openai-codex "Read and follow ~/dev/pi-skills/code-review/SKILL.md to review the PR. Diff is at $PR_DIFF" > "$TMP_DIR/review-codex.md" &
+   # Claude review MUST use the `claude` CLI (not `pi -p --model ...`) so it uses Claude auth.
+   claude -p --model opus --permission-mode bypassPermissions \
+     "Read and follow /Users/pat/Work/pi-skills/skills/code-review/SKILL.md to review the PR. Diff is at $PR_DIFF" \
+     > "$TMP_DIR/review-opus.md" &
+
+   # Codex review continues to use pi.
+   pi -p --model gpt-5.3-codex --provider openai-codex \
+     "Read and follow /Users/pat/Work/pi-skills/skills/code-review/SKILL.md to review the PR. Diff is at $PR_DIFF" \
+     > "$TMP_DIR/review-codex.md" &
+
    wait
    ```
+
+   If Claude fails because of auth or local lock contention, rerun only the Claude command after fixing auth (`claude auth`) or retrying.
 
 ### Phase 2: Active Validation (IMPORTANT)
 
