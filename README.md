@@ -25,6 +25,7 @@ Shared pi skills and extensions used by the team. Add this repo as a local packa
 - `ssh` — delegate all tool operations (read, write, edit, bash, grep, find, ls) to a remote machine via SSH. Usage: `pi --ssh user@host` or `pi --ssh user@host:/remote/path`. Requires SSH key-based auth and `bash` on remote. Based on the [example from pi-mono](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/examples/extensions/ssh.ts), but patched so remote tool calls work properly.
 - `side-by-side-diff` — overrides the built-in `edit` tool renderer to show side-by-side diffs with syntax highlighting and compact/expanded output.
 - `start-design-plan` — Claude-style design workflow extension with `/start-design-plan` and `/resume-design-plan`, plus `ask_user_question` and `design_plan_tracker` tools. Ported from concepts in `ed3d-plan-and-execute` (`https://github.com/ed3dai/ed3d-plugins`). Extension-specific license in `extensions/start-design-plan/LICENSE`.
+- `todo-overlay` — shows `TODO.md`/`todo.md` from the current working directory in a right-side non-capturing overlay, with auto-refresh and keyboard shortcuts for toggle/scroll.
 - `pi-skills-update-checker` — checks for new commits on startup and shows a widget when updates are available.
 - `nutrient-bug` — lightweight read-only Zendesk + Jira issue context workflow with `/bug`, `/bug-view`, and `nutrient_bug_get_context`.
 - `pi-self` — adds the `pi_run` tool for spawning `pi` subprocesses (required by `multi-agent-security-review`).
