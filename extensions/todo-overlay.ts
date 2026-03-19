@@ -61,7 +61,7 @@ class TodoOverlayComponent implements Component {
 			headerText = ` ${this.title} (${this.scrollOffset + 1}-${Math.min(this.scrollOffset + bodyLinesVisible.length, bodyLinesAll.length)}/${bodyLinesAll.length}) `;
 		}
 		const headerWidth = visibleWidth(headerText);
-		const top = this.theme.fg("borderMuted", `╭${headerText}${"─".repeat(Math.max(0, innerWidth - headerWidth - 1))}╮`);
+		const top = this.theme.fg("borderMuted", `╭${headerText}${"─".repeat(Math.max(0, innerWidth - headerWidth))}╮`);
 		const bottom = this.theme.fg("borderMuted", `╰${"─".repeat(innerWidth)}╯`);
 		const bodyLines = bodyLinesVisible.map((line) => {
 			const pad = Math.max(0, innerWidth - visibleWidth(line));
