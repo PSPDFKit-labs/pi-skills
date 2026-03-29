@@ -726,7 +726,7 @@ const SYNTHESIS_REQUIRED_HEADINGS = [
 async function resolveSynthesisModel(options: {
 	readonly ctx: ExtensionContext;
 	readonly selectedModel: string | null;
-}): Promise<{ readonly model: Model<Api>; readonly apiKey: string } | null> {
+}): Promise<{ readonly model: Model<Api>; readonly apiKey?: string; readonly headers?: Record<string, string> } | null> {
 	const available = options.ctx.modelRegistry.getAvailable();
 	const preferredProvider = options.ctx.model?.provider ?? null;
 
@@ -753,9 +753,9 @@ async function resolveSynthesisModel(options: {
 	}
 
 	for (const candidate of candidates) {
-		const apiKey = await options.ctx.modelRegistry.getApiKey(candidate);
-		if (!apiKey) continue;
-		return { model: candidate, apiKey };
+		const auth = await options.ctx.modelRegistry.getApiKeyAndHeaders(candidate);
+		if (!auth.ok) continue;
+		return { model: candidate, apiKey: auth.apiKey, headers: auth.headers };
 	}
 
 	return null;
@@ -787,7 +787,7 @@ async function runSynthesisWithLlm(options: {
 	const response = await complete(
 		selection.model,
 		{ messages: [userMessage] },
-		{ apiKey: selection.apiKey },
+		{ apiKey: selection.apiKey, headers: selection.headers },
 	);
 
 	if (response.stopReason === "aborted" || response.stopReason === "error") {
