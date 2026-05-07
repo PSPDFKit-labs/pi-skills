@@ -2,14 +2,14 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	truncateHead,
-} from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
-import { Container, Key, Text, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { Container, Key, Text, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 type IssueRefs = {
 	readonly zendeskId: number | null;
@@ -911,7 +911,4 @@ export default function nutrientBugExtension(pi: ExtensionAPI): void {
 		restoreState(ctx);
 	});
 
-	pi.on("session_switch", async (_event, ctx) => {
-		restoreState(ctx);
-	});
 }

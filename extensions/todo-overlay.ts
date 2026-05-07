@@ -9,8 +9,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext, type Theme } from "@mariozechner/pi-coding-agent";
-import { Box, Markdown, visibleWidth, type Component, type OverlayHandle, type TUI } from "@mariozechner/pi-tui";
+import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { Box, Markdown, visibleWidth, type Component, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 
 function renderTaskMarkers(text: string, theme: Theme): string {
 	return text
@@ -203,12 +203,6 @@ export default function todoOverlay(pi: ExtensionAPI) {
 		startWatcher(ctx);
 	});
 
-	pi.on("session_switch", async (_event, ctx) => {
-		if (!ctx.hasUI) return;
-		hiddenByUser = false;
-		ensureOverlay(ctx);
-		startWatcher(ctx);
-	});
 
 	pi.on("agent_end", async (_event, _ctx) => {
 		refreshOverlay();
