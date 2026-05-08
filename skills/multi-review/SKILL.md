@@ -29,7 +29,7 @@ Runs the `code-review` skill with 2 different models in parallel, then synthesiz
      > "$TMP_DIR/review-opus.md" &
 
    # Codex review continues to use pi.
-   pi -p --model gpt-5.3-codex --provider openai-codex \
+   pi -p --model gpt-5.5 --provider openai-codex \
      "Read and follow /Users/pat/Work/pi-skills/skills/code-review/SKILL.md to review the PR. Diff is at $PR_DIFF" \
      > "$TMP_DIR/review-codex.md" &
 
